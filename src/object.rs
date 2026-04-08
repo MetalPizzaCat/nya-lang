@@ -7,10 +7,9 @@ use std::{
 use crate::state::NyaState;
 
 /// This type holds a value for the vm through the vm stack.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum NyaPrimativeType {
     HeapRef(NyaHeapObject),
-    String(String),
     Number(f64),
     Int(i64),
     Nil,
@@ -26,10 +25,7 @@ impl NyaPrimativeType {
                     obj.mark_children();
                 }
             }
-            NyaPrimativeType::String(_)
-            | NyaPrimativeType::Number(_)
-            | NyaPrimativeType::Int(_)
-            | NyaPrimativeType::Nil => {}
+            NyaPrimativeType::Number(_) | NyaPrimativeType::Int(_) | NyaPrimativeType::Nil => {}
         }
     }
 }
@@ -39,6 +35,7 @@ impl NyaPrimativeType {
 pub enum NyaHeapType {
     Table(HashMap<String, NyaPrimativeType>),
     Array(Vec<NyaPrimativeType>),
+    String(String),
 }
 
 impl NyaHeapType {
@@ -55,6 +52,7 @@ impl NyaHeapType {
                     obj.mark_reference();
                 }
             }
+            NyaHeapType::String(_) => {}
         }
     }
 }
@@ -85,7 +83,7 @@ impl DerefMut for RawNyaHeapObject {
 ///
 /// # Safety
 /// This type does not implment drop and will leak memory if `free(self)` is not called.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct NyaHeapObject {
     pub inner: *mut RawNyaHeapObject,
 }
@@ -140,85 +138,101 @@ impl DerefMut for NyaHeapObject {
 
 // into trait
 
-pub trait IntoNyaObject {
+pub struct Nil;
+
+pub trait IntoNyaType {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimativeType;
 }
 
-impl IntoNyaObject for &str {
+impl IntoNyaType for Nil {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
-        NyaPrimativeType::String(self.into())
+        NyaPrimativeType::Nil
     }
 }
 
-impl IntoNyaObject for String {
+impl IntoNyaType for NyaPrimativeType {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
-        NyaPrimativeType::String(self)
+        self
     }
 }
 
-impl IntoNyaObject for u8 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
-        NyaPrimativeType::Int(self as i64)
+impl IntoNyaType for &str {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimativeType {
+        let obj = state.alloc_heap_object(NyaHeapType::String(self.into()));
+        NyaPrimativeType::HeapRef(obj)
     }
 }
 
-impl IntoNyaObject for u16 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
-        NyaPrimativeType::Int(self as i64)
+impl IntoNyaType for String {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimativeType {
+        let obj = state.alloc_heap_object(NyaHeapType::String(self));
+        NyaPrimativeType::HeapRef(obj)
     }
 }
 
-impl IntoNyaObject for u32 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
-        NyaPrimativeType::Int(self as i64)
-    }
-}
-
-impl IntoNyaObject for u64 {
+impl IntoNyaType for u8 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Int(self as i64)
     }
 }
 
-impl IntoNyaObject for i8 {
+impl IntoNyaType for u16 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Int(self as i64)
     }
 }
 
-impl IntoNyaObject for i16 {
+impl IntoNyaType for u32 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Int(self as i64)
     }
 }
 
-impl IntoNyaObject for i32 {
+impl IntoNyaType for u64 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Int(self as i64)
     }
 }
 
-impl IntoNyaObject for i64 {
+impl IntoNyaType for i8 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
+        NyaPrimativeType::Int(self as i64)
+    }
+}
+
+impl IntoNyaType for i16 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
+        NyaPrimativeType::Int(self as i64)
+    }
+}
+
+impl IntoNyaType for i32 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
+        NyaPrimativeType::Int(self as i64)
+    }
+}
+
+impl IntoNyaType for i64 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Int(self)
     }
 }
 
-impl IntoNyaObject for f32 {
+impl IntoNyaType for f32 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Number(self as f64)
     }
 }
 
-impl IntoNyaObject for f64 {
+impl IntoNyaType for f64 {
     fn into_nya_object(self, _: &mut NyaState) -> NyaPrimativeType {
         NyaPrimativeType::Number(self)
     }
 }
 
-impl<T, const N: usize> IntoNyaObject for [T; N]
+impl<T, const N: usize> IntoNyaType for [T; N]
 where
-    T: IntoNyaObject,
+    T: IntoNyaType,
 {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimativeType {
         let mut vec = Vec::new();
@@ -230,9 +244,9 @@ where
     }
 }
 
-impl<T> IntoNyaObject for Vec<T>
+impl<T> IntoNyaType for Vec<T>
 where
-    T: IntoNyaObject,
+    T: IntoNyaType,
 {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimativeType {
         let mut vec = Vec::new();
@@ -244,9 +258,9 @@ where
     }
 }
 
-impl<T> IntoNyaObject for HashMap<String, T>
+impl<T> IntoNyaType for HashMap<String, T>
 where
-    T: IntoNyaObject,
+    T: IntoNyaType,
 {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimativeType {
         let mut map = HashMap::new();

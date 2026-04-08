@@ -1,59 +1,46 @@
-use crate::object::{IntoNyaObject, NyaHeapObject, NyaHeapType, NyaPrimativeType};
+use std::collections::HashMap;
+
+use crate::{
+    instruction::Instruction,
+    object::{IntoNyaType, Nil, NyaHeapObject, NyaHeapType, NyaPrimativeType},
+};
 
 fn calc_idx(len: usize, idx: isize) -> usize {
     (if idx < 0 { len as isize + idx } else { idx } as usize)
 }
 
+/// This type holds the state of the virtual machine
 pub struct NyaState {
     stack: Vec<NyaPrimativeType>,
     heap: Vec<NyaHeapObject>,
+    globals: HashMap<String, NyaPrimativeType>,
 }
 
 impl NyaState {
+    /// Create a new NyaState
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
             heap: Vec::new(),
+            globals: HashMap::new(),
         }
     }
 
-    pub fn alloc_heap_object(&mut self, obj: NyaHeapType) -> NyaHeapObject {
-        let heap_obj = unsafe { NyaHeapObject::new(obj) };
-        self.heap.push(heap_obj.clone());
-        heap_obj
-    }
-
-    fn get_stack(&self, idx: isize) -> Option<&NyaPrimativeType> {
-        let idx = calc_idx(self.stack.len(), idx);
-        self.stack.get(idx)
-    }
-
-    fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimativeType> {
-        let idx = calc_idx(self.stack.len(), idx);
-        self.stack.get_mut(idx)
-    }
-
-    fn push_stack_object(&mut self, obj: NyaPrimativeType) {
-        self.stack.push(obj);
-    }
-
-    pub fn push_value<T>(&mut self, object: T)
-    where
-        T: IntoNyaObject,
-    {
-        let obj = object.into_nya_object(self);
-        self.push_stack_object(obj);
-    }
-
-    fn pop_stack_and_take(&mut self) -> Option<NyaPrimativeType> {
-        self.stack.pop()
-    }
-
-    pub fn pop_stack(&mut self, n: usize) {
-        for _ in 0..n {
-            self.pop_stack_and_take();
+    fn run_instructions(&mut self, instructions: &[Instruction]) {
+        for i in instructions {
+            match i {
+                Instruction::Push(obj) => self.push_value(*obj),
+                Instruction::Pop => self.pop_stack(1),
+                Instruction::SetGlobal(name, obj) => self.set_global(name, *obj),
+                Instruction::RemoveGlobal(name) => self.remove_global(name),
+                Instruction::PushGlobal(name) => self.push_global(name),
+                Instruction::PopGlobal(name) => self.pop_global(name),
+                Instruction::Add => todo!(),
+            }
         }
     }
+
+    // fetching data
 
     pub fn get_number(&self, idx: isize) -> Option<f64> {
         if let Some(NyaPrimativeType::Number(number)) = self.get_stack(idx) {
@@ -88,7 +75,9 @@ impl NyaState {
     }
 
     pub fn get_string(&self, idx: isize) -> Option<&str> {
-        if let Some(NyaPrimativeType::String(s)) = self.get_stack(idx) {
+        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(idx)
+            && let NyaHeapType::String(s) = &***heap_obj
+        {
             Some(s)
         } else {
             None
@@ -96,11 +85,104 @@ impl NyaState {
     }
 
     pub fn get_string_mut(&mut self, idx: isize) -> Option<&mut String> {
-        if let Some(NyaPrimativeType::String(s)) = self.get_stack_mut(idx) {
+        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
+            && let NyaHeapType::String(s) = &mut ***heap_obj
+        {
             Some(s)
         } else {
             None
         }
+    }
+
+    pub fn get_index(&mut self, stack_idx: isize, idx: isize) {
+        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+            && let NyaHeapType::Array(array) = &***heap_obj
+            && let Some(obj) = array.get(calc_idx(array.len(), idx))
+        {
+            self.push_stack_object(*obj);
+        } else {
+            self.push_value(Nil);
+        }
+    }
+
+    // pub fn set_index(&mut self, stack_idx: isize, idx: isize) {
+    //     if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack_mut(stack_idx)
+    //         && let NyaHeapType::Array(array) = &mut ***heap_obj
+    //     {
+    //         if let Some(obj) = self.pop_stack_and_take() {
+    //             array.push(obj);
+    //         } else {
+    //             array.push(Nil.into());
+    //         }
+    //     }
+    // }
+
+    // memory
+
+    /// Allocate an object on the gc heap. If it is not in a root
+    pub fn alloc_heap_object(&mut self, obj: NyaHeapType) -> NyaHeapObject {
+        let heap_obj = unsafe { NyaHeapObject::new(obj) };
+        self.heap.push(heap_obj);
+        heap_obj
+    }
+
+    fn get_stack(&self, idx: isize) -> Option<&NyaPrimativeType> {
+        let idx = calc_idx(self.stack.len(), idx);
+        self.stack.get(idx)
+    }
+
+    fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimativeType> {
+        let idx = calc_idx(self.stack.len(), idx);
+        self.stack.get_mut(idx)
+    }
+
+    fn push_stack_object(&mut self, obj: NyaPrimativeType) {
+        self.stack.push(obj);
+    }
+
+    pub fn push_value<T>(&mut self, object: T)
+    where
+        T: IntoNyaType,
+    {
+        let obj = object.into_nya_object(self);
+        self.push_stack_object(obj);
+    }
+
+    fn pop_stack_and_take(&mut self) -> Option<NyaPrimativeType> {
+        self.stack.pop()
+    }
+
+    pub fn pop_stack(&mut self, n: usize) {
+        for _ in 0..n {
+            self.pop_stack_and_take();
+        }
+    }
+
+    pub fn set_global<T>(&mut self, name: &str, object: T)
+    where
+        T: IntoNyaType,
+    {
+        let obj = object.into_nya_object(self);
+        self.globals.insert(name.to_string(), obj);
+    }
+
+    pub fn remove_global(&mut self, name: &str) {
+        self.globals.remove(name);
+    }
+
+    pub fn push_global(&mut self, name: &str) {
+        self.push_stack_object(
+            self.globals
+                .get(name)
+                .map_or(NyaPrimativeType::Nil, |obj| *obj),
+        );
+    }
+
+    pub fn pop_global(&mut self, name: &str) {
+        let obj = self
+            .pop_stack_and_take()
+            .map_or(NyaPrimativeType::Nil, |obj| obj);
+        self.set_global(name, obj);
     }
 
     pub fn garbage_collect(&mut self) {
@@ -109,6 +191,13 @@ impl NyaState {
         }
 
         for obj in &mut self.stack {
+            if let NyaPrimativeType::HeapRef(obj) = obj {
+                obj.marked = true;
+                obj.mark_children();
+            }
+        }
+
+        for obj in self.globals.values_mut() {
             if let NyaPrimativeType::HeapRef(obj) = obj {
                 obj.marked = true;
                 obj.mark_children();
@@ -131,7 +220,7 @@ impl Drop for NyaState {
     fn drop(&mut self) {
         for obj in &self.heap {
             unsafe {
-                obj.clone().free();
+                obj.free();
             }
         }
     }
