@@ -13,5 +13,5 @@ fn main() {
         Instruction::GetGlobal(0),
         Instruction::Print,
     ];
-    ns.run_instructions(&program);
+    ns.run_instructions(Vec::new(), &program);
 }
