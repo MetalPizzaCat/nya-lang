@@ -105,15 +105,15 @@ impl NyaState {
 
     // fetching data
 
-    pub fn get_number(&self, idx: isize) -> Option<f64> {
+    pub fn to_number(&self, idx: isize) -> Option<f64> {
         if let Some(NyaPrimitiveType::Number(number)) = self.get_stack(idx) {
-            Some(*number)
+            Some(number)
         } else {
             None
         }
     }
 
-    pub fn get_number_mut(&mut self, idx: isize) -> Option<&mut f64> {
+    pub fn to_number_mut(&mut self, idx: isize) -> Option<&mut f64> {
         if let Some(NyaPrimitiveType::Number(number)) = self.get_stack_mut(idx) {
             Some(number)
         } else {
@@ -121,15 +121,15 @@ impl NyaState {
         }
     }
 
-    pub fn get_int(&self, idx: isize) -> Option<i64> {
+    pub fn to_int(&self, idx: isize) -> Option<i64> {
         if let Some(NyaPrimitiveType::Int(i)) = self.get_stack(idx) {
-            Some(*i)
+            Some(i)
         } else {
             None
         }
     }
 
-    pub fn get_int_mut(&mut self, idx: isize) -> Option<&mut i64> {
+    pub fn to_int_mut(&mut self, idx: isize) -> Option<&mut i64> {
         if let Some(NyaPrimitiveType::Int(i)) = self.get_stack_mut(idx) {
             Some(i)
         } else {
@@ -137,9 +137,9 @@ impl NyaState {
         }
     }
 
-    pub fn get_string(&self, idx: isize) -> Option<&str> {
+    pub fn to_string(&self, idx: isize) -> Option<String> {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(idx)
-            && let NyaHeapType::String(s) = &***heap_obj
+            && let NyaHeapType::String(s) = (**heap_obj).clone()
         {
             Some(s)
         } else {
@@ -147,7 +147,7 @@ impl NyaState {
         }
     }
 
-    pub fn get_string_mut(&mut self, idx: isize) -> Option<&mut String> {
+    pub fn to_mut(&mut self, idx: isize) -> Option<&mut String> {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
             && let NyaHeapType::String(s) = &mut ***heap_obj
         {
@@ -157,33 +157,14 @@ impl NyaState {
         }
     }
 
-    pub fn get_index(&mut self, stack_idx: isize, idx: isize) {
+    pub fn get_field<T>(&mut self, stack_idx: isize, field: T)
+    where
+        T: IntoNyaType,
+    {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
-            && let NyaHeapType::Array(array) = &***heap_obj
-            && let Some(obj) = array.get(calc_idx(array.len(), idx))
-        {
-            self.push_stack_object(*obj);
-        } else {
-            self.push_value(Nil);
-        }
-    }
-
-    pub fn set_index(&mut self, stack_idx: isize, idx: isize) {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
-            && let NyaHeapType::Array(array) = &mut *(*heap_obj.clone())
-        {
-            if let Some(obj) = self.pop_stack_and_take() {
-                array.push(obj);
-            } else {
-                array.push(Nil.into_nya_object(self));
-            }
-        }
-    }
-
-    pub fn get_field(&mut self, stack_idx: isize, field: &str) {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
-            && let NyaHeapType::Table(array) = &***heap_obj
-            && let Some(obj) = array.get(field)
+            && let NyaHeapType::Table(table) = &**heap_obj
+            && let Some(key) = field.into_nya_object(self).into_hashable()
+            && let Some(obj) = table.get(&key)
         {
             self.push_stack_object(*obj);
         } else {
@@ -192,13 +173,14 @@ impl NyaState {
     }
 
     pub fn set_field(&mut self, stack_idx: isize, field: &str) {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
-            && let NyaHeapType::Table(table) = &mut *(*heap_obj.clone())
+        if let Some(NyaPrimitiveType::HeapRef(mut heap_obj)) = self.get_stack(stack_idx)
+            && let NyaHeapType::Table(table) = &mut **heap_obj
+            && let Some(key) = field.into_nya_object(self).into_hashable()
         {
             if let Some(obj) = self.pop_stack_and_take() {
-                table.insert(field.to_string(), obj);
+                table.insert(key, obj);
             } else {
-                table.insert(field.to_string(), Nil.into_nya_object(self));
+                table.insert(key, Nil.into_nya_object(self));
             }
         }
     }
@@ -229,9 +211,9 @@ impl NyaState {
         }
     }
 
-    fn get_stack(&self, idx: isize) -> Option<&NyaPrimitiveType> {
+    fn get_stack(&self, idx: isize) -> Option<NyaPrimitiveType> {
         let idx = calc_idx(self.stack.len(), idx);
-        self.stack.get(idx)
+        self.stack.get(idx).copied()
     }
 
     fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimitiveType> {
