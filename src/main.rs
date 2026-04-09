@@ -19,6 +19,6 @@ fn main() {
     println!("{n:?}");
     println!("{i:?}");
     ns.pop_stack(4);
-    ns.set_global("test", [0.5]);
+    ns.set_global_direct("test", [0.5]);
     ns.garbage_collect();
 }

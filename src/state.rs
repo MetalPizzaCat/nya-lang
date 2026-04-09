@@ -26,16 +26,37 @@ impl NyaState {
         }
     }
 
-    fn run_instructions(&mut self, instructions: &[Instruction]) {
-        for i in instructions {
-            match i {
-                Instruction::Push(obj) => self.push_value(*obj),
+    pub fn run_instructions(&mut self, instructions: &[Instruction]) {
+        for instruction in instructions {
+            match instruction {
+                Instruction::Push(obj) => self.push_stack_object(*obj),
                 Instruction::Pop => self.pop_stack(1),
-                Instruction::SetGlobal(name, obj) => self.set_global(name, *obj),
-                Instruction::RemoveGlobal(name) => self.remove_global(name),
-                Instruction::PushGlobal(name) => self.push_global(name),
-                Instruction::PopGlobal(name) => self.pop_global(name),
-                Instruction::Add => todo!(),
+                Instruction::SetGlobal(name) => self.set_global(name),
+                Instruction::GetGlobal(name) => self.get_global(&name),
+                Instruction::Add => {
+                    let Some(a) = self.pop_stack_and_take() else {
+                        panic!("not enough items on the stack")
+                    };
+                    let Some(b) = self.pop_stack_and_take() else {
+                        panic!("not enough items on the stack")
+                    };
+                    match (a, b) {
+                        (NyaPrimativeType::Int(a), NyaPrimativeType::Int(b)) => {
+                            self.push_value(NyaPrimativeType::Int(a + b))
+                        }
+                        (NyaPrimativeType::Number(a), NyaPrimativeType::Int(b)) => {
+                            self.push_value(NyaPrimativeType::Number(a + b as f64))
+                        }
+                        (NyaPrimativeType::Int(a), NyaPrimativeType::Number(b)) => {
+                            self.push_value(NyaPrimativeType::Number(a as f64 + b))
+                        }
+                        (NyaPrimativeType::Number(a), NyaPrimativeType::Number(b)) => {
+                            self.push_value(NyaPrimativeType::Number(a + b))
+                        }
+                        (_, _) => panic!("types cannot be added"),
+                    }
+                }
+                Instruction::Halt => return,
             }
         }
     }
@@ -105,17 +126,40 @@ impl NyaState {
         }
     }
 
-    // pub fn set_index(&mut self, stack_idx: isize, idx: isize) {
-    //     if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack_mut(stack_idx)
-    //         && let NyaHeapType::Array(array) = &mut ***heap_obj
-    //     {
-    //         if let Some(obj) = self.pop_stack_and_take() {
-    //             array.push(obj);
-    //         } else {
-    //             array.push(Nil.into());
-    //         }
-    //     }
-    // }
+    pub fn set_index(&mut self, stack_idx: isize, idx: isize) {
+        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+            && let NyaHeapType::Array(array) = &mut *(*heap_obj.clone())
+        {
+            if let Some(obj) = self.pop_stack_and_take() {
+                array.push(obj);
+            } else {
+                array.push(Nil.into_nya_object(self));
+            }
+        }
+    }
+
+    pub fn get_field(&mut self, stack_idx: isize, field: &str) {
+        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+            && let NyaHeapType::Table(array) = &***heap_obj
+            && let Some(obj) = array.get(field)
+        {
+            self.push_stack_object(*obj);
+        } else {
+            self.push_value(Nil);
+        }
+    }
+
+    pub fn set_field(&mut self, stack_idx: isize, field: &str) {
+        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+            && let NyaHeapType::Table(table) = &mut *(*heap_obj.clone())
+        {
+            if let Some(obj) = self.pop_stack_and_take() {
+                table.insert(field.to_string(), obj);
+            } else {
+                table.insert(field.to_string(), Nil.into_nya_object(self));
+            }
+        }
+    }
 
     // memory
 
@@ -158,7 +202,7 @@ impl NyaState {
         }
     }
 
-    pub fn set_global<T>(&mut self, name: &str, object: T)
+    pub fn set_global_direct<T>(&mut self, name: &str, object: T)
     where
         T: IntoNyaType,
     {
@@ -170,7 +214,7 @@ impl NyaState {
         self.globals.remove(name);
     }
 
-    pub fn push_global(&mut self, name: &str) {
+    pub fn get_global(&mut self, name: &str) {
         self.push_stack_object(
             self.globals
                 .get(name)
@@ -178,11 +222,11 @@ impl NyaState {
         );
     }
 
-    pub fn pop_global(&mut self, name: &str) {
+    pub fn set_global(&mut self, name: &str) {
         let obj = self
             .pop_stack_and_take()
             .map_or(NyaPrimativeType::Nil, |obj| obj);
-        self.set_global(name, obj);
+        self.set_global_direct(name, obj);
     }
 
     pub fn garbage_collect(&mut self) {
