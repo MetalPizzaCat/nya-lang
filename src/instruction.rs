@@ -3,8 +3,12 @@ use crate::object::NyaPrimitiveType;
 pub enum Instruction {
     Push(NyaPrimitiveType),
     Pop,
-    SetGlobal(String),
-    GetGlobal(String),
+    SetGlobal(usize),
+    GetGlobal(usize),
+    GetConst(usize),
+    GetLocal,
+    SetLocal,
     Add,
+    Print,
     Halt,
 }

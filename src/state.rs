@@ -1,3 +1,4 @@
+use core::panic;
 use std::collections::HashMap;
 
 use crate::{
@@ -33,8 +34,26 @@ impl NyaState {
             match instruction {
                 Instruction::Push(obj) => self.push_stack_object(*obj),
                 Instruction::Pop => self.pop_stack(1),
-                Instruction::SetGlobal(name) => self.set_global(name),
-                Instruction::GetGlobal(name) => self.get_global(name),
+                Instruction::SetGlobal(name) => {
+                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(*name)
+                    else {
+                        panic!("Invalid constant id '{}'", name)
+                    };
+                    let NyaHeapType::String(name) = &***name_str else {
+                        panic!("Expected string on stack as global name")
+                    };
+                    self.set_global(&name.clone());
+                }
+                Instruction::GetGlobal(name) => {
+                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(*name)
+                    else {
+                        panic!("Invalid constant id '{}'", name)
+                    };
+                    let NyaHeapType::String(name) = &***name_str else {
+                        panic!("Expected string on stack as global name")
+                    };
+                    self.get_global(&name.clone());
+                }
                 Instruction::Add => {
                     let Some(a) = self.pop_stack_and_take() else {
                         panic!("not enough items on the stack")
@@ -59,6 +78,27 @@ impl NyaState {
                     }
                 }
                 Instruction::Halt => return,
+                Instruction::GetLocal => todo!(),
+                Instruction::SetLocal => todo!(),
+                Instruction::GetConst(id) => self.get_constant(*id),
+                Instruction::Print => {
+                    if let Some(val) = self.pop_stack_and_take() {
+                        println!(
+                            "{}",
+                            match val {
+                                NyaPrimitiveType::Number(val) => val.to_string(),
+                                NyaPrimitiveType::Int(val) => val.to_string(),
+                                NyaPrimitiveType::Nil => "nil".to_owned(),
+                                NyaPrimitiveType::HeapRef(obj) => match &mut *(*obj.clone()) {
+                                    NyaHeapType::Table(hash_map) => "invalid type".to_owned(),
+                                    NyaHeapType::Array(nya_primitive_types) =>
+                                        "invalid type".to_owned(),
+                                    NyaHeapType::String(s) => s.clone(),
+                                },
+                            }
+                        );
+                    }
+                }
             }
         }
     }
