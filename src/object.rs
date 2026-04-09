@@ -29,7 +29,6 @@ impl NyaPrimitiveType {
         }
     }
 }
-
 /// This type holds a value for the vm through the heap
 #[derive(Debug, Clone)]
 pub enum NyaHeapType {
