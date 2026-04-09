@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     instruction::Instruction,
-    object::{IntoNyaType, Nil, NyaHeapObject, NyaHeapType, NyaPrimativeType},
+    object::{IntoNyaType, Nil, NyaHeapObject, NyaHeapType, NyaPrimitiveType},
 };
 
 fn calc_idx(len: usize, idx: isize) -> usize {
@@ -11,10 +11,10 @@ fn calc_idx(len: usize, idx: isize) -> usize {
 
 /// This type holds the state of the virtual machine
 pub struct NyaState {
-    stack: Vec<NyaPrimativeType>,
+    stack: Vec<NyaPrimitiveType>,
     heap: Vec<NyaHeapObject>,
-    globals: HashMap<String, NyaPrimativeType>,
-    constant_pool: Vec<NyaPrimativeType>,
+    globals: HashMap<String, NyaPrimitiveType>,
+    constant_pool: Vec<NyaPrimitiveType>,
 }
 
 impl NyaState {
@@ -43,17 +43,17 @@ impl NyaState {
                         panic!("not enough items on the stack")
                     };
                     match (a, b) {
-                        (NyaPrimativeType::Int(a), NyaPrimativeType::Int(b)) => {
-                            self.push_value(NyaPrimativeType::Int(a + b))
+                        (NyaPrimitiveType::Int(a), NyaPrimitiveType::Int(b)) => {
+                            self.push_value(NyaPrimitiveType::Int(a + b))
                         }
-                        (NyaPrimativeType::Number(a), NyaPrimativeType::Int(b)) => {
-                            self.push_value(NyaPrimativeType::Number(a + b as f64))
+                        (NyaPrimitiveType::Number(a), NyaPrimitiveType::Int(b)) => {
+                            self.push_value(NyaPrimitiveType::Number(a + b as f64))
                         }
-                        (NyaPrimativeType::Int(a), NyaPrimativeType::Number(b)) => {
-                            self.push_value(NyaPrimativeType::Number(a as f64 + b))
+                        (NyaPrimitiveType::Int(a), NyaPrimitiveType::Number(b)) => {
+                            self.push_value(NyaPrimitiveType::Number(a as f64 + b))
                         }
-                        (NyaPrimativeType::Number(a), NyaPrimativeType::Number(b)) => {
-                            self.push_value(NyaPrimativeType::Number(a + b))
+                        (NyaPrimitiveType::Number(a), NyaPrimitiveType::Number(b)) => {
+                            self.push_value(NyaPrimitiveType::Number(a + b))
                         }
                         (_, _) => panic!("types cannot be added"),
                     }
@@ -66,7 +66,7 @@ impl NyaState {
     // fetching data
 
     pub fn get_number(&self, idx: isize) -> Option<f64> {
-        if let Some(NyaPrimativeType::Number(number)) = self.get_stack(idx) {
+        if let Some(NyaPrimitiveType::Number(number)) = self.get_stack(idx) {
             Some(*number)
         } else {
             None
@@ -74,7 +74,7 @@ impl NyaState {
     }
 
     pub fn get_number_mut(&mut self, idx: isize) -> Option<&mut f64> {
-        if let Some(NyaPrimativeType::Number(number)) = self.get_stack_mut(idx) {
+        if let Some(NyaPrimitiveType::Number(number)) = self.get_stack_mut(idx) {
             Some(number)
         } else {
             None
@@ -82,7 +82,7 @@ impl NyaState {
     }
 
     pub fn get_int(&self, idx: isize) -> Option<i64> {
-        if let Some(NyaPrimativeType::Int(i)) = self.get_stack(idx) {
+        if let Some(NyaPrimitiveType::Int(i)) = self.get_stack(idx) {
             Some(*i)
         } else {
             None
@@ -90,7 +90,7 @@ impl NyaState {
     }
 
     pub fn get_int_mut(&mut self, idx: isize) -> Option<&mut i64> {
-        if let Some(NyaPrimativeType::Int(i)) = self.get_stack_mut(idx) {
+        if let Some(NyaPrimitiveType::Int(i)) = self.get_stack_mut(idx) {
             Some(i)
         } else {
             None
@@ -98,7 +98,7 @@ impl NyaState {
     }
 
     pub fn get_string(&self, idx: isize) -> Option<&str> {
-        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(idx)
             && let NyaHeapType::String(s) = &***heap_obj
         {
             Some(s)
@@ -108,7 +108,7 @@ impl NyaState {
     }
 
     pub fn get_string_mut(&mut self, idx: isize) -> Option<&mut String> {
-        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
             && let NyaHeapType::String(s) = &mut ***heap_obj
         {
             Some(s)
@@ -118,7 +118,7 @@ impl NyaState {
     }
 
     pub fn get_index(&mut self, stack_idx: isize, idx: isize) {
-        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
             && let NyaHeapType::Array(array) = &***heap_obj
             && let Some(obj) = array.get(calc_idx(array.len(), idx))
         {
@@ -129,7 +129,7 @@ impl NyaState {
     }
 
     pub fn set_index(&mut self, stack_idx: isize, idx: isize) {
-        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
             && let NyaHeapType::Array(array) = &mut *(*heap_obj.clone())
         {
             if let Some(obj) = self.pop_stack_and_take() {
@@ -141,7 +141,7 @@ impl NyaState {
     }
 
     pub fn get_field(&mut self, stack_idx: isize, field: &str) {
-        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
             && let NyaHeapType::Table(array) = &***heap_obj
             && let Some(obj) = array.get(field)
         {
@@ -152,7 +152,7 @@ impl NyaState {
     }
 
     pub fn set_field(&mut self, stack_idx: isize, field: &str) {
-        if let Some(NyaPrimativeType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
             && let NyaHeapType::Table(table) = &mut *(*heap_obj.clone())
         {
             if let Some(obj) = self.pop_stack_and_take() {
@@ -189,17 +189,17 @@ impl NyaState {
         }
     }
 
-    fn get_stack(&self, idx: isize) -> Option<&NyaPrimativeType> {
+    fn get_stack(&self, idx: isize) -> Option<&NyaPrimitiveType> {
         let idx = calc_idx(self.stack.len(), idx);
         self.stack.get(idx)
     }
 
-    fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimativeType> {
+    fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimitiveType> {
         let idx = calc_idx(self.stack.len(), idx);
         self.stack.get_mut(idx)
     }
 
-    fn push_stack_object(&mut self, obj: NyaPrimativeType) {
+    fn push_stack_object(&mut self, obj: NyaPrimitiveType) {
         self.stack.push(obj);
     }
 
@@ -211,7 +211,7 @@ impl NyaState {
         self.push_stack_object(obj);
     }
 
-    fn pop_stack_and_take(&mut self) -> Option<NyaPrimativeType> {
+    fn pop_stack_and_take(&mut self) -> Option<NyaPrimitiveType> {
         self.stack.pop()
     }
 
@@ -237,14 +237,14 @@ impl NyaState {
         self.push_stack_object(
             self.globals
                 .get(name)
-                .map_or(NyaPrimativeType::Nil, |obj| *obj),
+                .map_or(NyaPrimitiveType::Nil, |obj| *obj),
         );
     }
 
     pub fn set_global(&mut self, name: &str) {
         let obj = self
             .pop_stack_and_take()
-            .map_or(NyaPrimativeType::Nil, |obj| obj);
+            .map_or(NyaPrimitiveType::Nil, |obj| obj);
         self.set_global_direct(name, obj);
     }
 
@@ -254,21 +254,21 @@ impl NyaState {
         }
 
         for obj in &mut self.stack {
-            if let NyaPrimativeType::HeapRef(obj) = obj {
+            if let NyaPrimitiveType::HeapRef(obj) = obj {
                 obj.marked = true;
                 obj.mark_children();
             }
         }
 
         for obj in self.globals.values_mut() {
-            if let NyaPrimativeType::HeapRef(obj) = obj {
+            if let NyaPrimitiveType::HeapRef(obj) = obj {
                 obj.marked = true;
                 obj.mark_children();
             }
         }
 
         for obj in &mut self.constant_pool {
-            if let NyaPrimativeType::HeapRef(obj) = obj {
+            if let NyaPrimitiveType::HeapRef(obj) = obj {
                 obj.marked = true;
                 obj.mark_children();
             }
