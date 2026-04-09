@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::{
     instruction::Instruction,
-    object::{IntoNyaType, Nil, NyaHeapObject, NyaHeapType, NyaPrimitiveType},
+    object::{self, IntoNyaType, Nil, NyaHeapObject, NyaHeapType, NyaPrimitiveType},
 };
 
 fn calc_idx(len: usize, idx: isize) -> usize {
@@ -51,7 +51,7 @@ impl NyaState {
                     else {
                         panic!("Invalid constant id '{}'", name)
                     };
-                    let NyaHeapType::String(name) = &***name_str else {
+                    let NyaHeapType::String(name) = &**name_str else {
                         panic!("Expected string on stack as global name")
                     };
                     self.set_global(&name.clone());
@@ -61,7 +61,7 @@ impl NyaState {
                     else {
                         panic!("Invalid constant id '{}'", name)
                     };
-                    let NyaHeapType::String(name) = &***name_str else {
+                    let NyaHeapType::String(name) = &**name_str else {
                         panic!("Expected string on stack as global name")
                     };
                     self.get_global(&name.clone());
@@ -111,8 +111,8 @@ impl NyaState {
                                 NyaPrimitiveType::Number(val) => val.to_string(),
                                 NyaPrimitiveType::Int(val) => val.to_string(),
                                 NyaPrimitiveType::Nil => "nil".to_owned(),
-                                NyaPrimitiveType::HeapRef(obj) => match &mut *(*obj.clone()) {
-                                    NyaHeapType::Table(hash_map) => "invalid type".to_owned(),
+                                NyaPrimitiveType::HeapRef(obj) => match &mut *obj.clone() {
+                                    NyaHeapType::Table(_) => "invalid type".to_owned(),
                                     NyaHeapType::String(s) => s.clone(),
                                 },
                             }
@@ -185,7 +185,7 @@ impl NyaState {
 
     pub fn to_string(&self, idx: isize) -> Option<String> {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(idx)
-            && let NyaHeapType::String(s) = (**heap_obj).clone()
+            && let NyaHeapType::String(s) = (*heap_obj).clone()
         {
             Some(s)
         } else {
@@ -193,13 +193,24 @@ impl NyaState {
         }
     }
 
-    pub fn to_mut(&mut self, idx: isize) -> Option<&mut String> {
+    pub fn to_string_mut(&mut self, idx: isize) -> Option<&mut String> {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
-            && let NyaHeapType::String(s) = &mut ***heap_obj
+            && let NyaHeapType::String(s) = &mut **heap_obj
         {
             Some(s)
         } else {
             None
+        }
+    }
+
+    pub fn stack_to<T>(&self, stack_idx: isize) -> Result<T, object::NotCorrectTypeError>
+    where
+        T: TryFrom<NyaPrimitiveType, Error = object::NotCorrectTypeError>,
+    {
+        if let Some(obj) = self.get_stack(stack_idx) {
+            obj.try_into()
+        } else {
+            Err(object::NotCorrectTypeError)
         }
     }
 
@@ -208,7 +219,7 @@ impl NyaState {
         T: IntoNyaType,
     {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
-            && let NyaHeapType::Table(table) = &**heap_obj
+            && let NyaHeapType::Table(table) = &*heap_obj
             && let Some(key) = field.into_nya_object(self).into_hashable()
             && let Some(obj) = table.get(&key)
         {
@@ -220,7 +231,7 @@ impl NyaState {
 
     pub fn set_field(&mut self, stack_idx: isize, field: &str) {
         if let Some(NyaPrimitiveType::HeapRef(mut heap_obj)) = self.get_stack(stack_idx)
-            && let NyaHeapType::Table(table) = &mut **heap_obj
+            && let NyaHeapType::Table(table) = &mut *heap_obj
             && let Some(key) = field.into_nya_object(self).into_hashable()
         {
             if let Some(obj) = self.pop_stack_and_take() {
@@ -331,36 +342,40 @@ impl NyaState {
 
     pub fn garbage_collect(&mut self) {
         for obj in &mut self.heap {
-            obj.marked = false;
+            let raw = obj.get_raw_mut();
+            raw.marked = false;
         }
 
         for stack in &mut self.stack {
-            for obj in stack {
+            for obj in &mut stack {
                 if let NyaPrimitiveType::HeapRef(obj) = obj {
-                    obj.marked = true;
-                    obj.mark_children();
+                    let raw = obj.get_raw_mut();
+                    raw.marked = true;
+                    raw.mark_children();
                 }
             }
         }
 
         for obj in self.globals.values_mut() {
             if let NyaPrimitiveType::HeapRef(obj) = obj {
-                obj.marked = true;
-                obj.mark_children();
+                let raw = obj.get_raw_mut();
+                raw.marked = true;
+                raw.mark_children();
             }
         }
 
         for obj in &mut self.constant_pool {
             if let NyaPrimitiveType::HeapRef(obj) = obj {
-                obj.marked = true;
-                obj.mark_children();
+                let raw = obj.get_raw_mut();
+                raw.marked = true;
+                raw.mark_children();
             }
         }
 
         for i in (0..self.heap.len()).rev() {
-            if !self.heap[i].marked {
+            if !self.heap[i].get_raw_mut().marked {
                 let obj = self.heap.swap_remove(i);
-                println!("freed {:?}", **obj);
+                println!("freed {:?}", *obj);
                 unsafe {
                     obj.free();
                 }

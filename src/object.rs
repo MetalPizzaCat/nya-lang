@@ -20,9 +20,10 @@ impl NyaPrimitiveType {
     pub fn mark_reference(&mut self) {
         match self {
             NyaPrimitiveType::HeapRef(obj) => {
-                if !obj.marked {
-                    obj.marked = true;
-                    obj.mark_children();
+                let raw = obj.get_raw_mut();
+                if !raw.marked {
+                    raw.marked = true;
+                    raw.mark_children();
                 }
             }
             NyaPrimitiveType::Number(_) | NyaPrimitiveType::Int(_) | NyaPrimitiveType::Nil => {}
@@ -33,7 +34,7 @@ impl NyaPrimitiveType {
         match self {
             Self::Number(_) | Self::Nil => None,
             Self::Int(i) => Some(NyaHashableType::Int(i)),
-            Self::HeapRef(heap_obj) => match &**heap_obj {
+            Self::HeapRef(heap_obj) => match &*heap_obj {
                 NyaHeapType::Table(_) => None,
                 NyaHeapType::String(s) => Some(NyaHashableType::String(s.clone())),
             },
@@ -133,18 +134,22 @@ impl NyaHeapObject {
             dealloc(self.inner as *mut u8, Layout::new::<RawNyaHeapObject>());
         }
     }
+
+    pub fn get_raw_mut(&self) -> &mut RawNyaHeapObject {
+        unsafe { &mut *self.inner }
+    }
 }
 
 impl Deref for NyaHeapObject {
-    type Target = RawNyaHeapObject;
+    type Target = NyaHeapType;
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.inner }
+        unsafe { &*(*self.inner) }
     }
 }
 
 impl DerefMut for NyaHeapObject {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.inner }
+        unsafe { &mut *(*self.inner) }
     }
 }
 
@@ -290,5 +295,68 @@ where
         }
         let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
         NyaPrimitiveType::HeapRef(heap_ref)
+    }
+}
+
+// from
+
+#[derive(Debug)]
+pub struct NotCorrectTypeError;
+
+impl TryFrom<NyaPrimitiveType> for f64 {
+    type Error = NotCorrectTypeError;
+    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
+        match value {
+            NyaPrimitiveType::Number(n) => Ok(n),
+            _ => Err(NotCorrectTypeError),
+        }
+    }
+}
+
+impl TryFrom<NyaPrimitiveType> for f32 {
+    type Error = NotCorrectTypeError;
+    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
+        match value {
+            NyaPrimitiveType::Number(n) => Ok(n as f32),
+            _ => Err(NotCorrectTypeError),
+        }
+    }
+}
+
+impl TryFrom<NyaPrimitiveType> for i64 {
+    type Error = NotCorrectTypeError;
+    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
+        match value {
+            NyaPrimitiveType::Int(i) => Ok(i),
+            _ => Err(NotCorrectTypeError),
+        }
+    }
+}
+
+impl TryFrom<NyaPrimitiveType> for u64 {
+    type Error = NotCorrectTypeError;
+    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
+        Ok(i64::try_from(value)? as u64)
+    }
+}
+
+impl TryFrom<NyaPrimitiveType> for usize {
+    type Error = NotCorrectTypeError;
+    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
+        Ok(i64::try_from(value)? as usize)
+    }
+}
+
+impl TryFrom<NyaPrimitiveType> for String {
+    type Error = NotCorrectTypeError;
+    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
+        if let NyaPrimitiveType::HeapRef(heap_ref) = value {
+            match (*heap_ref).clone() {
+                NyaHeapType::String(s) => Ok(s),
+                _ => Err(NotCorrectTypeError),
+            }
+        } else {
+            Err(NotCorrectTypeError)
+        }
     }
 }
