@@ -47,24 +47,24 @@ impl NyaState {
                 Instruction::Push(obj) => self.push_stack_object(obj),
                 Instruction::Pop => self.pop_stack(1),
                 Instruction::SetGlobal(name) => {
-                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(name)
-                    else {
+                    // INFO: I added a get_constant function that auto copies the inner value so you
+                    // don't have to do a double deref
+                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.get_constant(name) else {
                         panic!("Invalid constant id '{}'", name)
                     };
-                    let NyaHeapType::String(name) = &**name_str else {
+                    let NyaHeapType::String(name) = &*name_str else {
                         panic!("Expected string on stack as global name")
                     };
-                    self.set_global(&name.clone());
+                    self.pop_global(&name.clone());
                 }
                 Instruction::GetGlobal(name) => {
-                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(name)
-                    else {
+                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.get_constant(name) else {
                         panic!("Invalid constant id '{}'", name)
                     };
-                    let NyaHeapType::String(name) = &**name_str else {
+                    let NyaHeapType::String(name) = &*name_str else {
                         panic!("Expected string on stack as global name")
                     };
-                    self.get_global(&name.clone());
+                    self.push_global(&name.clone());
                 }
                 Instruction::Add => {
                     let Some(a) = self.pop_stack_and_take() else {
@@ -102,7 +102,7 @@ impl NyaState {
                     };
                     self.set_local(id, val);
                 }
-                Instruction::GetConst(id) => self.get_constant(id),
+                Instruction::GetConst(id) => self.push_constant(id),
                 Instruction::Print => {
                     if let Some(val) = self.pop_stack_and_take() {
                         println!(
@@ -144,22 +144,25 @@ impl NyaState {
     }
 
     pub fn get_local(&self, id: usize) -> Option<&NyaPrimitiveType> {
+        // INFO: if you don't care a about the error message this can be changed to
+        // `self.variables.last()?.get(id)`
         let Some(block) = self.variables.last() else {
             panic!("Missing variable block")
         };
         block.get(id)
     }
+
     // fetching data
 
-    pub fn to_number(&self, idx: isize) -> Option<f64> {
-        if let Some(NyaPrimitiveType::Number(number)) = self.get_stack(idx) {
+    pub fn get_number(&self, idx: isize) -> Option<f64> {
+        if let Some(NyaPrimitiveType::Number(number)) = self.get_stack_object(idx) {
             Some(number)
         } else {
             None
         }
     }
 
-    pub fn to_number_mut(&mut self, idx: isize) -> Option<&mut f64> {
+    pub fn get_number_mut(&mut self, idx: isize) -> Option<&mut f64> {
         if let Some(NyaPrimitiveType::Number(number)) = self.get_stack_mut(idx) {
             Some(number)
         } else {
@@ -167,15 +170,15 @@ impl NyaState {
         }
     }
 
-    pub fn to_int(&self, idx: isize) -> Option<i64> {
-        if let Some(NyaPrimitiveType::Int(i)) = self.get_stack(idx) {
+    pub fn get_int(&self, idx: isize) -> Option<i64> {
+        if let Some(NyaPrimitiveType::Int(i)) = self.get_stack_object(idx) {
             Some(i)
         } else {
             None
         }
     }
 
-    pub fn to_int_mut(&mut self, idx: isize) -> Option<&mut i64> {
+    pub fn get_int_mut(&mut self, idx: isize) -> Option<&mut i64> {
         if let Some(NyaPrimitiveType::Int(i)) = self.get_stack_mut(idx) {
             Some(i)
         } else {
@@ -183,8 +186,8 @@ impl NyaState {
         }
     }
 
-    pub fn to_string(&self, idx: isize) -> Option<String> {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(idx)
+    pub fn get_string(&self, idx: isize) -> Option<String> {
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_object(idx)
             && let NyaHeapType::String(s) = (*heap_obj).clone()
         {
             Some(s)
@@ -193,7 +196,7 @@ impl NyaState {
         }
     }
 
-    pub fn to_string_mut(&mut self, idx: isize) -> Option<&mut String> {
+    pub fn get_string_mut(&mut self, idx: isize) -> Option<&mut String> {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
             && let NyaHeapType::String(s) = &mut **heap_obj
         {
@@ -203,22 +206,22 @@ impl NyaState {
         }
     }
 
-    pub fn stack_to<T>(&self, stack_idx: isize) -> Result<T, object::NotCorrectTypeError>
+    pub fn get_stack<T>(&self, stack_idx: isize) -> Result<T, object::NotCorrectTypeError>
     where
         T: TryFrom<NyaPrimitiveType, Error = object::NotCorrectTypeError>,
     {
-        if let Some(obj) = self.get_stack(stack_idx) {
+        if let Some(obj) = self.get_stack_object(stack_idx) {
             obj.try_into()
         } else {
             Err(object::NotCorrectTypeError)
         }
     }
 
-    pub fn get_field<T>(&mut self, stack_idx: isize, field: T)
+    pub fn push_field<T>(&mut self, stack_idx: isize, field: T)
     where
         T: IntoNyaType,
     {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack(stack_idx)
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_object(stack_idx)
             && let NyaHeapType::Table(table) = &*heap_obj
             && let Some(key) = field.into_nya_object(self).into_hashable()
             && let Some(obj) = table.get(&key)
@@ -229,8 +232,8 @@ impl NyaState {
         }
     }
 
-    pub fn set_field(&mut self, stack_idx: isize, field: &str) {
-        if let Some(NyaPrimitiveType::HeapRef(mut heap_obj)) = self.get_stack(stack_idx)
+    pub fn pop_field(&mut self, stack_idx: isize, field: &str) {
+        if let Some(NyaPrimitiveType::HeapRef(mut heap_obj)) = self.get_stack_object(stack_idx)
             && let NyaHeapType::Table(table) = &mut *heap_obj
             && let Some(key) = field.into_nya_object(self).into_hashable()
         {
@@ -260,7 +263,11 @@ impl NyaState {
         self.constant_pool.len() - 1
     }
 
-    pub fn get_constant(&mut self, idx: usize) {
+    pub fn get_constant(&mut self, idx: usize) -> Option<NyaPrimitiveType> {
+        self.constant_pool.get(idx).copied()
+    }
+
+    pub fn push_constant(&mut self, idx: usize) {
         if let Some(obj) = self.constant_pool.get(idx) {
             self.push_stack_object(*obj);
         } else {
@@ -268,7 +275,7 @@ impl NyaState {
         }
     }
 
-    fn get_stack(&self, idx: isize) -> Option<NyaPrimitiveType> {
+    fn get_stack_object(&self, idx: isize) -> Option<NyaPrimitiveType> {
         let idx = calc_idx(self.stack.len(), idx);
         let Some(stack) = self.stack.last() else {
             panic!("No stack is available");
@@ -300,10 +307,7 @@ impl NyaState {
     }
 
     fn pop_stack_and_take(&mut self) -> Option<NyaPrimitiveType> {
-        let Some(current_stack) = self.stack.last_mut() else {
-            return None;
-        };
-
+        let current_stack = self.stack.last_mut()?;
         current_stack.pop()
     }
 
@@ -325,7 +329,7 @@ impl NyaState {
         self.globals.remove(name);
     }
 
-    pub fn get_global(&mut self, name: &str) {
+    pub fn push_global(&mut self, name: &str) {
         self.push_stack_object(
             self.globals
                 .get(name)
@@ -333,7 +337,7 @@ impl NyaState {
         );
     }
 
-    pub fn set_global(&mut self, name: &str) {
+    pub fn pop_global(&mut self, name: &str) {
         let obj = self
             .pop_stack_and_take()
             .map_or(NyaPrimitiveType::Nil, |obj| obj);
@@ -347,7 +351,7 @@ impl NyaState {
         }
 
         for stack in &mut self.stack {
-            for obj in &mut stack {
+            for obj in stack {
                 if let NyaPrimitiveType::HeapRef(obj) = obj {
                     let raw = obj.get_raw_mut();
                     raw.marked = true;
