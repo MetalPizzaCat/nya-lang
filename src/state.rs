@@ -14,6 +14,7 @@ pub struct NyaState {
     stack: Vec<NyaPrimativeType>,
     heap: Vec<NyaHeapObject>,
     globals: HashMap<String, NyaPrimativeType>,
+    constant_pool: Vec<NyaPrimativeType>,
 }
 
 impl NyaState {
@@ -23,6 +24,7 @@ impl NyaState {
             stack: Vec::new(),
             heap: Vec::new(),
             globals: HashMap::new(),
+            constant_pool: Vec::new(),
         }
     }
 
@@ -32,7 +34,7 @@ impl NyaState {
                 Instruction::Push(obj) => self.push_stack_object(*obj),
                 Instruction::Pop => self.pop_stack(1),
                 Instruction::SetGlobal(name) => self.set_global(name),
-                Instruction::GetGlobal(name) => self.get_global(&name),
+                Instruction::GetGlobal(name) => self.get_global(name),
                 Instruction::Add => {
                     let Some(a) = self.pop_stack_and_take() else {
                         panic!("not enough items on the stack")
@@ -170,6 +172,23 @@ impl NyaState {
         heap_obj
     }
 
+    pub fn add_constant<T>(&mut self, obj: T) -> usize
+    where
+        T: IntoNyaType,
+    {
+        let obj = obj.into_nya_object(self);
+        self.constant_pool.push(obj);
+        self.constant_pool.len() - 1
+    }
+
+    pub fn get_constant(&mut self, idx: usize) {
+        if let Some(obj) = self.constant_pool.get(idx) {
+            self.push_stack_object(*obj);
+        } else {
+            self.push_value(Nil);
+        }
+    }
+
     fn get_stack(&self, idx: isize) -> Option<&NyaPrimativeType> {
         let idx = calc_idx(self.stack.len(), idx);
         self.stack.get(idx)
@@ -242,6 +261,13 @@ impl NyaState {
         }
 
         for obj in self.globals.values_mut() {
+            if let NyaPrimativeType::HeapRef(obj) = obj {
+                obj.marked = true;
+                obj.mark_children();
+            }
+        }
+
+        for obj in &mut self.constant_pool {
             if let NyaPrimativeType::HeapRef(obj) = obj {
                 obj.marked = true;
                 obj.mark_children();
