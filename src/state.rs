@@ -12,9 +12,10 @@ fn calc_idx(len: usize, idx: isize) -> usize {
 
 /// This type holds the state of the virtual machine
 pub struct NyaState {
-    stack: Vec<NyaPrimitiveType>,
+    stack: Vec<Vec<NyaPrimitiveType>>,
     heap: Vec<NyaHeapObject>,
     globals: HashMap<String, NyaPrimitiveType>,
+    variables: Vec<Vec<NyaPrimitiveType>>,
     constant_pool: Vec<NyaPrimitiveType>,
 }
 
@@ -25,17 +26,28 @@ impl NyaState {
             stack: Vec::new(),
             heap: Vec::new(),
             globals: HashMap::new(),
+            variables: Vec::new(),
             constant_pool: Vec::new(),
         }
     }
 
-    pub fn run_instructions(&mut self, instructions: &[Instruction]) {
-        for instruction in instructions {
-            match instruction {
-                Instruction::Push(obj) => self.push_stack_object(*obj),
+    pub fn run_instructions(
+        &mut self,
+        arguments: Vec<NyaPrimitiveType>,
+        instructions: &[Instruction],
+    ) {
+        let mut pc: usize = 0;
+        self.create_variable_block();
+        for i in 0..arguments.len() {
+            self.set_local(i, arguments[i]);
+        }
+        self.create_stack_block();
+        'exec: while pc < instructions.len() {
+            match instructions[pc] {
+                Instruction::Push(obj) => self.push_stack_object(obj),
                 Instruction::Pop => self.pop_stack(1),
                 Instruction::SetGlobal(name) => {
-                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(*name)
+                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(name)
                     else {
                         panic!("Invalid constant id '{}'", name)
                     };
@@ -45,7 +57,7 @@ impl NyaState {
                     self.set_global(&name.clone());
                 }
                 Instruction::GetGlobal(name) => {
-                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(*name)
+                    let Some(NyaPrimitiveType::HeapRef(name_str)) = self.constant_pool.get(name)
                     else {
                         panic!("Invalid constant id '{}'", name)
                     };
@@ -77,10 +89,20 @@ impl NyaState {
                         (_, _) => panic!("types cannot be added"),
                     }
                 }
-                Instruction::Halt => return,
-                Instruction::GetLocal => todo!(),
-                Instruction::SetLocal => todo!(),
-                Instruction::GetConst(id) => self.get_constant(*id),
+                Instruction::Halt => break 'exec,
+                Instruction::GetLocal(id) => {
+                    let Some(val) = self.get_local(id) else {
+                        panic!("No variable with id {} exists", id)
+                    };
+                    self.push_value(*val)
+                }
+                Instruction::SetLocal(id) => {
+                    let Some(val) = self.pop_stack_and_take() else {
+                        panic!("Missing value on stack")
+                    };
+                    self.set_local(id, val);
+                }
+                Instruction::GetConst(id) => self.get_constant(id),
                 Instruction::Print => {
                     if let Some(val) = self.pop_stack_and_take() {
                         println!(
@@ -98,9 +120,35 @@ impl NyaState {
                     }
                 }
             }
+            pc += 1
         }
     }
 
+    pub fn create_variable_block(&mut self) {
+        self.variables.push(Vec::new());
+    }
+
+    pub fn create_stack_block(&mut self) {
+        self.stack.push(Vec::new());
+    }
+
+    pub fn set_local(&mut self, id: usize, val: NyaPrimitiveType) {
+        let Some(block) = self.variables.last_mut() else {
+            panic!("Missing variable block")
+        };
+        if block.len() <= id {
+            block.resize(id + 1, NyaPrimitiveType::Nil);
+        }
+        block[id] = val;
+        // this is where i would increase ref count btw, but this doesn't use that
+    }
+
+    pub fn get_local(&self, id: usize) -> Option<&NyaPrimitiveType> {
+        let Some(block) = self.variables.last() else {
+            panic!("Missing variable block")
+        };
+        block.get(id)
+    }
     // fetching data
 
     pub fn to_number(&self, idx: isize) -> Option<f64> {
@@ -222,16 +270,25 @@ impl NyaState {
 
     fn get_stack(&self, idx: isize) -> Option<NyaPrimitiveType> {
         let idx = calc_idx(self.stack.len(), idx);
-        self.stack.get(idx).copied()
+        let Some(stack) = self.stack.last() else {
+            panic!("No stack is available");
+        };
+        stack.get(idx).copied()
     }
 
     fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimitiveType> {
-        let idx = calc_idx(self.stack.len(), idx);
-        self.stack.get_mut(idx)
+        let id = calc_idx(self.stack.len(), idx);
+        let Some(stack) = self.stack.last_mut() else {
+            panic!("No stack is available");
+        };
+        stack.get_mut(id)
     }
 
     fn push_stack_object(&mut self, obj: NyaPrimitiveType) {
-        self.stack.push(obj);
+        let Some(stack) = self.stack.last_mut() else {
+            panic!("No stack is available");
+        };
+        stack.push(obj);
     }
 
     pub fn push_value<T>(&mut self, object: T)
@@ -243,7 +300,11 @@ impl NyaState {
     }
 
     fn pop_stack_and_take(&mut self) -> Option<NyaPrimitiveType> {
-        self.stack.pop()
+        let Some(current_stack) = self.stack.last_mut() else {
+            return None;
+        };
+
+        current_stack.pop()
     }
 
     pub fn pop_stack(&mut self, n: usize) {
@@ -285,11 +346,13 @@ impl NyaState {
             raw.marked = false;
         }
 
-        for obj in &mut self.stack {
-            if let NyaPrimitiveType::HeapRef(obj) = obj {
-                let raw = obj.get_raw_mut();
-                raw.marked = true;
-                raw.mark_children();
+        for stack in &mut self.stack {
+            for obj in &mut stack {
+                if let NyaPrimitiveType::HeapRef(obj) = obj {
+                    let raw = obj.get_raw_mut();
+                    raw.marked = true;
+                    raw.mark_children();
+                }
             }
         }
 
