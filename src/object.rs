@@ -28,12 +28,30 @@ impl NyaPrimitiveType {
             NyaPrimitiveType::Number(_) | NyaPrimitiveType::Int(_) | NyaPrimitiveType::Nil => {}
         }
     }
+
+    pub fn into_hashable(self) -> Option<NyaHashableType> {
+        match self {
+            Self::Number(_) | Self::Nil => None,
+            Self::Int(i) => Some(NyaHashableType::Int(i)),
+            Self::HeapRef(heap_obj) => match &**heap_obj {
+                NyaHeapType::Table(_) => None,
+                NyaHeapType::String(s) => Some(NyaHashableType::String(s.clone())),
+            },
+        }
+    }
 }
+
+/// This type holds a value that is hashable
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum NyaHashableType {
+    Int(i64),
+    String(String),
+}
+
 /// This type holds a value for the vm through the heap
 #[derive(Debug, Clone)]
 pub enum NyaHeapType {
-    Table(HashMap<String, NyaPrimitiveType>),
-    Array(Vec<NyaPrimitiveType>),
+    Table(HashMap<NyaHashableType, NyaPrimitiveType>),
     String(String),
 }
 
@@ -43,11 +61,6 @@ impl NyaHeapType {
         match self {
             NyaHeapType::Table(hash_map) => {
                 for (_, obj) in hash_map.iter_mut() {
-                    obj.mark_reference();
-                }
-            }
-            NyaHeapType::Array(vec) => {
-                for obj in vec {
                     obj.mark_reference();
                 }
             }
@@ -229,42 +242,51 @@ impl IntoNyaType for f64 {
     }
 }
 
-impl<T, const N: usize> IntoNyaType for [T; N]
-where
-    T: IntoNyaType,
-{
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
-        let mut vec = Vec::new();
-        for obj in self {
-            vec.push(obj.into_nya_object(state));
-        }
-        let heap_ref = state.alloc_heap_object(NyaHeapType::Array(vec));
-        NyaPrimitiveType::HeapRef(heap_ref)
-    }
-}
-
 impl<T> IntoNyaType for Vec<T>
 where
     T: IntoNyaType,
 {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
-        let mut vec = Vec::new();
-        for obj in self {
-            vec.push(obj.into_nya_object(state));
+        let mut map = HashMap::new();
+        for (i, v) in self.into_iter().enumerate() {
+            if let Some(key) = NyaPrimitiveType::Int(i as i64).into_hashable() {
+                let obj = v.into_nya_object(state);
+                map.insert(key, obj);
+            }
         }
-        let heap_ref = state.alloc_heap_object(NyaHeapType::Array(vec));
+        let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
         NyaPrimitiveType::HeapRef(heap_ref)
     }
 }
 
-impl<T> IntoNyaType for HashMap<String, T>
+impl<T, const N: usize> IntoNyaType for [T; N]
 where
     T: IntoNyaType,
 {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
         let mut map = HashMap::new();
+        for (i, v) in self.into_iter().enumerate() {
+            if let Some(key) = NyaPrimitiveType::Int(i as i64).into_hashable() {
+                let obj = v.into_nya_object(state);
+                map.insert(key, obj);
+            }
+        }
+        let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
+        NyaPrimitiveType::HeapRef(heap_ref)
+    }
+}
+
+impl<K, V> IntoNyaType for HashMap<K, V>
+where
+    K: IntoNyaType,
+    V: IntoNyaType,
+{
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
+        let mut map = HashMap::new();
         for (k, v) in self {
-            map.insert(k, v.into_nya_object(state));
+            if let Some(key) = k.into_nya_object(state).into_hashable() {
+                map.insert(key, v.into_nya_object(state));
+            }
         }
         let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
         NyaPrimitiveType::HeapRef(heap_ref)

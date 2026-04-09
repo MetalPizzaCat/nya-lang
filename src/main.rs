@@ -9,16 +9,16 @@ fn main() {
     ns.push_value(0.5);
     ns.push_value("test");
     ns.push_value([0, 1, 4, 5]);
-    let n = ns.get_number(-3);
+    let n = ns.to_number(-3);
 
-    ns.get_index(-1, 1);
-    let i = ns.get_int(-1);
+    ns.get_field(-1, 1);
+    let i = ns.to_int(-1);
 
     let idx = ns.add_constant("blah");
     ns.get_constant(idx);
 
-    let s = ns.get_string(-4);
-    let s2 = ns.get_string(-1);
+    let s = ns.to_string(-4);
+    let s2 = ns.to_string(-1);
     println!("{s2:?}");
     println!("{s:?}");
     println!("{n:?}");
