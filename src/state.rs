@@ -276,10 +276,10 @@ impl NyaState {
     }
 
     fn get_stack_object(&self, idx: isize) -> Option<NyaPrimitiveType> {
-        let idx = calc_idx(self.stack.len(), idx);
         let Some(stack) = self.stack.last() else {
             panic!("No stack is available");
         };
+        let idx = calc_idx(stack.len(), idx);
         stack.get(idx).copied()
     }
 
