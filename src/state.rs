@@ -1,9 +1,10 @@
 use core::panic;
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::{
+    garbage_collect::{GarbageCollector, GcGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
     instruction::Instruction,
-    object::{self, IntoNyaType, Nil, NyaHeapObject, NyaHeapType, NyaPrimitiveType},
+    object::{self, FromNyaType, IntoNyaType, Nil, NyaHeapType, NyaPrimitiveType},
 };
 
 fn calc_idx(len: usize, idx: isize) -> usize {
@@ -12,8 +13,8 @@ fn calc_idx(len: usize, idx: isize) -> usize {
 
 /// This type holds the state of the virtual machine
 pub struct NyaState {
+    gc: GarbageCollector,
     stack: Vec<Vec<NyaPrimitiveType>>,
-    heap: Vec<NyaHeapObject>,
     globals: HashMap<String, NyaPrimitiveType>,
     variables: Vec<Vec<NyaPrimitiveType>>,
     constant_pool: Vec<NyaPrimitiveType>,
@@ -23,8 +24,8 @@ impl NyaState {
     /// Create a new NyaState
     pub fn new() -> Self {
         Self {
+            gc: GarbageCollector::new(),
             stack: Vec::new(),
-            heap: Vec::new(),
             globals: HashMap::new(),
             variables: Vec::new(),
             constant_pool: Vec::new(),
@@ -52,7 +53,7 @@ impl NyaState {
                     let Some(NyaPrimitiveType::HeapRef(name_str)) = self.get_constant(name) else {
                         panic!("Invalid constant id '{}'", name)
                     };
-                    let NyaHeapType::String(name) = &*name_str else {
+                    let NyaHeapType::String(name) = &*name_str.borrow() else {
                         panic!("Expected string on stack as global name")
                     };
                     self.pop_global(&name.clone());
@@ -61,7 +62,7 @@ impl NyaState {
                     let Some(NyaPrimitiveType::HeapRef(name_str)) = self.get_constant(name) else {
                         panic!("Invalid constant id '{}'", name)
                     };
-                    let NyaHeapType::String(name) = &*name_str else {
+                    let NyaHeapType::String(name) = &*name_str.borrow() else {
                         panic!("Expected string on stack as global name")
                     };
                     self.push_global(&name.clone());
@@ -111,7 +112,7 @@ impl NyaState {
                                 NyaPrimitiveType::Number(val) => val.to_string(),
                                 NyaPrimitiveType::Int(val) => val.to_string(),
                                 NyaPrimitiveType::Nil => "nil".to_owned(),
-                                NyaPrimitiveType::HeapRef(obj) => match &mut *obj.clone() {
+                                NyaPrimitiveType::HeapRef(obj) => match &mut obj.borrow().clone() {
                                     NyaHeapType::Table(_) => "invalid type".to_owned(),
                                     NyaHeapType::String(s) => s.clone(),
                                 },
@@ -163,7 +164,7 @@ impl NyaState {
     }
 
     pub fn get_number_mut(&mut self, idx: isize) -> Option<&mut f64> {
-        if let Some(NyaPrimitiveType::Number(number)) = self.get_stack_mut(idx) {
+        if let Some(NyaPrimitiveType::Number(number)) = self.get_stack_object_mut(idx) {
             Some(number)
         } else {
             None
@@ -179,41 +180,29 @@ impl NyaState {
     }
 
     pub fn get_int_mut(&mut self, idx: isize) -> Option<&mut i64> {
-        if let Some(NyaPrimitiveType::Int(i)) = self.get_stack_mut(idx) {
+        if let Some(NyaPrimitiveType::Int(i)) = self.get_stack_object_mut(idx) {
             Some(i)
         } else {
             None
         }
     }
 
-    pub fn get_string(&self, idx: isize) -> Option<String> {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_object(idx)
-            && let NyaHeapType::String(s) = (*heap_obj).clone()
-        {
-            Some(s)
-        } else {
-            None
-        }
+    pub fn get_string(&self, idx: isize) -> Option<GcInnerGuard<String>> {
+        self.get_stack(idx)
     }
 
-    pub fn get_string_mut(&mut self, idx: isize) -> Option<&mut String> {
-        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_mut(idx)
-            && let NyaHeapType::String(s) = &mut **heap_obj
-        {
-            Some(s)
-        } else {
-            None
-        }
+    pub fn get_string_mut(&mut self, idx: isize) -> Option<GcInnerGuardMut<String>> {
+        self.get_stack(idx)
     }
 
-    pub fn get_stack<T>(&self, stack_idx: isize) -> Result<T, object::NotCorrectTypeError>
+    pub fn get_stack<T>(&self, stack_idx: isize) -> Option<T>
     where
-        T: TryFrom<NyaPrimitiveType, Error = object::NotCorrectTypeError>,
+        T: FromNyaType,
     {
         if let Some(obj) = self.get_stack_object(stack_idx) {
-            obj.try_into()
+            T::from_nya_object(obj)
         } else {
-            Err(object::NotCorrectTypeError)
+            None
         }
     }
 
@@ -222,7 +211,7 @@ impl NyaState {
         T: IntoNyaType,
     {
         if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_object(stack_idx)
-            && let NyaHeapType::Table(table) = &*heap_obj
+            && let NyaHeapType::Table(table) = &*heap_obj.borrow()
             && let Some(key) = field.into_nya_object(self).into_hashable()
             && let Some(obj) = table.get(&key)
         {
@@ -233,8 +222,8 @@ impl NyaState {
     }
 
     pub fn pop_field(&mut self, stack_idx: isize, field: &str) {
-        if let Some(NyaPrimitiveType::HeapRef(mut heap_obj)) = self.get_stack_object(stack_idx)
-            && let NyaHeapType::Table(table) = &mut *heap_obj
+        if let Some(NyaPrimitiveType::HeapRef(heap_obj)) = self.get_stack_object(stack_idx)
+            && let NyaHeapType::Table(table) = &mut *heap_obj.borrow_mut()
             && let Some(key) = field.into_nya_object(self).into_hashable()
         {
             if let Some(obj) = self.pop_stack_and_take() {
@@ -248,10 +237,8 @@ impl NyaState {
     // memory
 
     /// Allocate an object on the gc heap. If it is not in a root
-    pub fn alloc_heap_object(&mut self, obj: NyaHeapType) -> NyaHeapObject {
-        let heap_obj = unsafe { NyaHeapObject::new(obj) };
-        self.heap.push(heap_obj);
-        heap_obj
+    pub fn alloc_heap_object(&mut self, obj: NyaHeapType) -> GcObject {
+        self.gc.alloc(obj)
     }
 
     pub fn add_constant<T>(&mut self, obj: T) -> usize
@@ -283,7 +270,7 @@ impl NyaState {
         stack.get(idx).copied()
     }
 
-    fn get_stack_mut(&mut self, idx: isize) -> Option<&mut NyaPrimitiveType> {
+    fn get_stack_object_mut(&mut self, idx: isize) -> Option<&mut NyaPrimitiveType> {
         let id = calc_idx(self.stack.len(), idx);
         let Some(stack) = self.stack.last_mut() else {
             panic!("No stack is available");
@@ -345,55 +332,18 @@ impl NyaState {
     }
 
     pub fn garbage_collect(&mut self) {
-        for obj in &mut self.heap {
-            let raw = obj.get_raw_mut();
-            raw.marked = false;
-        }
-
         for stack in &mut self.stack {
-            for obj in stack {
-                if let NyaPrimitiveType::HeapRef(obj) = obj {
-                    let raw = obj.get_raw_mut();
-                    raw.marked = true;
-                    raw.mark_children();
-                }
-            }
+            self.gc.mark_slice(stack);
         }
 
         for obj in self.globals.values_mut() {
-            if let NyaPrimitiveType::HeapRef(obj) = obj {
-                let raw = obj.get_raw_mut();
-                raw.marked = true;
-                raw.mark_children();
-            }
+            self.gc.mark(obj);
         }
 
-        for obj in &mut self.constant_pool {
-            if let NyaPrimitiveType::HeapRef(obj) = obj {
-                let raw = obj.get_raw_mut();
-                raw.marked = true;
-                raw.mark_children();
-            }
-        }
+        self.gc.mark_slice(&mut self.constant_pool);
 
-        for i in (0..self.heap.len()).rev() {
-            if !self.heap[i].get_raw_mut().marked {
-                let obj = self.heap.swap_remove(i);
-                println!("freed {:?}", *obj);
-                unsafe {
-                    obj.free();
-                }
-            }
-        }
-    }
-}
-
-impl Drop for NyaState {
-    fn drop(&mut self) {
-        for obj in &self.heap {
-            unsafe {
-                obj.free();
-            }
+        unsafe {
+            self.gc.sweep();
         }
     }
 }
