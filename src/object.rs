@@ -1,10 +1,10 @@
 use std::{
-    cell::{Ref, RefCell, RefMut},
+    cell::{Ref, RefMut},
     collections::HashMap,
 };
 
 use crate::{
-    garbage_collect::{GarbageCollector, GcInnerGuard, GcInnerGuardMut, GcObject},
+    garbage_collect::{GcInnerGuard, GcInnerGuardMut, GcObject},
     state::NyaState,
 };
 

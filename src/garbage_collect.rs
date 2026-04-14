@@ -55,10 +55,10 @@ impl GcObject {
                 if ptr.is_null() {
                     handle_alloc_error(Layout::new::<RawGcObject>())
                 }
-                *ptr = RawGcObject {
+                ptr.write(RawGcObject {
                     inner: RefCell::new(obj),
                     marked: false,
-                };
+                });
                 ptr
             },
         }
@@ -87,13 +87,13 @@ impl GcObject {
 impl Deref for GcObject {
     type Target = RefCell<NyaHeapType>;
     fn deref(&self) -> &Self::Target {
-        unsafe { &*(*self.inner) }
+        unsafe { &*self.inner }
     }
 }
 
 impl DerefMut for GcObject {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *(*self.inner) }
+        unsafe { &mut *self.inner }
     }
 }
 
@@ -116,13 +116,13 @@ impl GcGuard {
     {
         let refcell = &**self.inner;
 
-        let value_ref = f(&refcell)?;
+        let value_ref = f(refcell)?;
 
         unsafe {
-            let extended_ref = std::mem::transmute(value_ref);
+            let extended_ref = std::mem::transmute::<Ref<'_, T>, Ref<'static, T>>(value_ref);
 
             Some(GcInnerGuard {
-                gc_guard: self.inner.clone(),
+                _gc_guard: self.inner.clone(),
                 value: extended_ref,
             })
         }
@@ -134,13 +134,13 @@ impl GcGuard {
     {
         let refcell = &**self.inner;
 
-        let value_ref = f(&refcell)?;
+        let value_ref = f(refcell)?;
 
         unsafe {
-            let extended_ref = std::mem::transmute(value_ref);
+            let extended_ref = std::mem::transmute::<RefMut<'_, T>, RefMut<'static, T>>(value_ref);
 
             Some(GcInnerGuardMut {
-                gc_guard: self.inner.clone(),
+                _gc_guard: self.inner.clone(),
                 value: extended_ref,
             })
         }
@@ -148,32 +148,32 @@ impl GcGuard {
 }
 
 pub struct GcInnerGuard<T: 'static> {
-    gc_guard: Rc<GcObject>,
+    _gc_guard: Rc<GcObject>,
     value: Ref<'static, T>,
 }
 
 impl<T> Deref for GcInnerGuard<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        &*self.value
+        &self.value
     }
 }
 
 pub struct GcInnerGuardMut<T: 'static> {
-    gc_guard: Rc<GcObject>,
+    _gc_guard: Rc<GcObject>,
     value: RefMut<'static, T>,
 }
 
 impl<T> Deref for GcInnerGuardMut<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        &*self.value
+        &self.value
     }
 }
 
 impl<T> DerefMut for GcInnerGuardMut<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.value
+        &mut self.value
     }
 }
 

@@ -1,10 +1,10 @@
 use core::panic;
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 use crate::{
-    garbage_collect::{GarbageCollector, GcGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
+    garbage_collect::{GarbageCollector, GcInnerGuard, GcInnerGuardMut, GcObject},
     instruction::Instruction,
-    object::{self, FromNyaType, IntoNyaType, Nil, NyaHeapType, NyaPrimitiveType},
+    object::{FromNyaType, IntoNyaType, Nil, NyaHeapType, NyaPrimitiveType},
 };
 
 fn calc_idx(len: usize, idx: isize) -> usize {
