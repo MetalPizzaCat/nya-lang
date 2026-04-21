@@ -1,15 +1,17 @@
 use std::{
-    alloc::{Layout, alloc, dealloc, handle_alloc_error},
+    cell::{Ref, RefMut},
     collections::HashMap,
-    ops::{Deref, DerefMut},
 };
 
-use crate::state::NyaState;
+use crate::{
+    garbage_collect::{GcInnerGuard, GcInnerGuardMut, GcObject},
+    state::NyaState,
+};
 
 /// This type holds a value for the vm through the vm stack.
 #[derive(Debug, Clone, Copy)]
 pub enum NyaPrimitiveType {
-    HeapRef(NyaHeapObject),
+    HeapRef(GcObject),
     Number(f64),
     Int(i64),
     Nil,
@@ -23,7 +25,7 @@ impl NyaPrimitiveType {
                 let raw = obj.get_raw_mut();
                 if !raw.marked {
                     raw.marked = true;
-                    raw.mark_children();
+                    raw.borrow_mut().mark_children();
                 }
             }
             NyaPrimitiveType::Number(_) | NyaPrimitiveType::Int(_) | NyaPrimitiveType::Nil => {}
@@ -34,7 +36,7 @@ impl NyaPrimitiveType {
         match self {
             Self::Number(_) | Self::Nil => None,
             Self::Int(i) => Some(NyaHashableType::Int(i)),
-            Self::HeapRef(heap_obj) => match &*heap_obj {
+            Self::HeapRef(heap_obj) => match &*heap_obj.borrow() {
                 NyaHeapType::Table(_) => None,
                 NyaHeapType::String(s) => Some(NyaHashableType::String(s.clone())),
             },
@@ -67,89 +69,6 @@ impl NyaHeapType {
             }
             NyaHeapType::String(_) => {}
         }
-    }
-}
-
-/// This is the inner type to `NyaHeapObject` and tracks whether it has been marked for removal by
-/// the gc.
-#[derive(Debug, Clone)]
-pub struct RawNyaHeapObject {
-    pub inner: NyaHeapType,
-    pub marked: bool,
-}
-
-impl Deref for RawNyaHeapObject {
-    type Target = NyaHeapType;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl DerefMut for RawNyaHeapObject {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-/// This type is for the vm to track memory and should not be used outside of it.
-/// Look at the garbage collector for how it is used.
-///
-/// # Safety
-/// This type does not implment drop and will leak memory if `free(self)` is not called.
-#[derive(Debug, Clone, Copy)]
-pub struct NyaHeapObject {
-    pub inner: *mut RawNyaHeapObject,
-}
-
-impl NyaHeapObject {
-    /// Create a new object on the heap
-    ///
-    /// # Safety
-    /// This structure does not implment drop so if it stops being tracked it will leak memory.
-    /// This function is only meant to be used by the vm and it should never be needed
-    /// outside of it.
-    pub unsafe fn new(obj: NyaHeapType) -> Self {
-        Self {
-            inner: unsafe {
-                let ptr = alloc(Layout::new::<RawNyaHeapObject>()) as *mut RawNyaHeapObject;
-                if ptr.is_null() {
-                    handle_alloc_error(Layout::new::<RawNyaHeapObject>())
-                }
-                *ptr = RawNyaHeapObject {
-                    inner: obj,
-                    marked: false,
-                };
-                ptr
-            },
-        }
-    }
-
-    /// Free this object from the heap
-    ///
-    /// # Safety
-    /// Calling this while something holds a refrence too it still will cause an invalid access.
-    /// This function should only be used by the garbage collector.
-    pub unsafe fn free(self) {
-        unsafe {
-            dealloc(self.inner as *mut u8, Layout::new::<RawNyaHeapObject>());
-        }
-    }
-
-    pub fn get_raw_mut(&self) -> &mut RawNyaHeapObject {
-        unsafe { &mut *self.inner }
-    }
-}
-
-impl Deref for NyaHeapObject {
-    type Target = NyaHeapType;
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*(*self.inner) }
-    }
-}
-
-impl DerefMut for NyaHeapObject {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *(*self.inner) }
     }
 }
 
@@ -300,63 +219,80 @@ where
 
 // from
 
-#[derive(Debug)]
-pub struct NotCorrectTypeError;
+pub trait FromNyaType
+where
+    Self: Sized,
+{
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self>;
+}
 
-impl TryFrom<NyaPrimitiveType> for f64 {
-    type Error = NotCorrectTypeError;
-    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
-        match value {
-            NyaPrimitiveType::Number(n) => Ok(n),
-            _ => Err(NotCorrectTypeError),
+impl FromNyaType for f64 {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        match object {
+            NyaPrimitiveType::Number(n) => Some(n),
+            _ => None,
         }
     }
 }
 
-impl TryFrom<NyaPrimitiveType> for f32 {
-    type Error = NotCorrectTypeError;
-    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
-        match value {
-            NyaPrimitiveType::Number(n) => Ok(n as f32),
-            _ => Err(NotCorrectTypeError),
+impl FromNyaType for f32 {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        match object {
+            NyaPrimitiveType::Number(n) => Some(n as f32),
+            _ => None,
         }
     }
 }
 
-impl TryFrom<NyaPrimitiveType> for i64 {
-    type Error = NotCorrectTypeError;
-    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
-        match value {
-            NyaPrimitiveType::Int(i) => Ok(i),
-            _ => Err(NotCorrectTypeError),
+impl FromNyaType for i64 {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        match object {
+            NyaPrimitiveType::Int(i) => Some(i),
+            _ => None,
         }
     }
 }
 
-impl TryFrom<NyaPrimitiveType> for u64 {
-    type Error = NotCorrectTypeError;
-    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
-        Ok(i64::try_from(value)? as u64)
+impl FromNyaType for u64 {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        Some(i64::from_nya_object(object)? as u64)
     }
 }
 
-impl TryFrom<NyaPrimitiveType> for usize {
-    type Error = NotCorrectTypeError;
-    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
-        Ok(i64::try_from(value)? as usize)
+impl FromNyaType for usize {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        Some(i64::from_nya_object(object)? as usize)
     }
 }
 
-impl TryFrom<NyaPrimitiveType> for String {
-    type Error = NotCorrectTypeError;
-    fn try_from(value: NyaPrimitiveType) -> Result<Self, Self::Error> {
-        if let NyaPrimitiveType::HeapRef(heap_ref) = value {
-            match (*heap_ref).clone() {
-                NyaHeapType::String(s) => Ok(s),
-                _ => Err(NotCorrectTypeError),
-            }
+impl FromNyaType for GcInnerGuard<String> {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        if let NyaPrimitiveType::HeapRef(heap_ref) = object {
+            heap_ref.create_guard().map_inner(|obj| {
+                Ref::filter_map(obj.borrow(), |inner| match inner {
+                    NyaHeapType::String(s) => Some(s),
+                    _ => None,
+                })
+                .ok()
+            })
         } else {
-            Err(NotCorrectTypeError)
+            None
+        }
+    }
+}
+
+impl FromNyaType for GcInnerGuardMut<String> {
+    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+        if let NyaPrimitiveType::HeapRef(heap_ref) = object {
+            heap_ref.create_guard().map_inner_mut(|obj| {
+                RefMut::filter_map(obj.borrow_mut(), |inner| match inner {
+                    NyaHeapType::String(s) => Some(s),
+                    _ => None,
+                })
+                .ok()
+            })
+        } else {
+            None
         }
     }
 }
