@@ -14,14 +14,16 @@ mod tests {
 
         ns.push_value("test string");
 
-        // {
-        //     let mut s = ns.get_string_mut(-1).unwrap();
-        //     s.push_str(". Whooo!! :3");
-        // }
-        //
-        // // let s2 = ns.get_string(-1).unwrap();
-        // // println!("{}", *s2);
-        // ns.pop_stack(1);
+        {
+            let mut s = ns.get_string_mut(-1).unwrap();
+            s.push_str(". Whooo!! :3");
+        }
+
+        let s2 = ns.get_string(-1).unwrap();
+
+        assert_eq!(*s2, "test string. Whooo!! :3");
+
+        ns.pop_stack(1);
         ns.garbage_collect();
     }
 }
