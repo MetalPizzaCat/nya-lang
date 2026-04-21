@@ -1,17 +1,17 @@
 use std::{ops::Not, sync::Arc};
 
 use crate::{
-    object::{NotCorrectTypeError, NyaPrimitiveType},
+    object::{FromNyaType, NyaPrimitiveType},
     state::NyaState,
 };
 
 #[derive(Clone)]
 pub struct RustClosure {
-    func: Arc<dyn CallableRustClosure<Error = NotCorrectTypeError>>,
+    func: Arc<dyn CallableRustClosure>,
 }
 
 impl RustClosure {
-    pub fn call(&self, state: &mut NyaState) -> Result<(), NotCorrectTypeError> {
+    pub fn call(&self, state: &mut NyaState) -> Option<()> {
         self.func.call(state)
     }
 }
@@ -24,8 +24,7 @@ where
 }
 
 pub trait CallableRustClosure {
-    type Error;
-    fn call(&self, state: &mut NyaState) -> Result<(), Self::Error>;
+    fn call(&self, state: &mut NyaState) -> Option<()>;
 }
 
 pub struct FunctionGenericType<F, R, Args> {
@@ -41,13 +40,12 @@ where
     fn into_function_generic(self) -> FunctionGenericType<Self, R, Args>;
 }
 
-// impl<F, R0, T1, T2> FromGenericCallable<F, R0, (T1, T2)> for RustClosure
+// impl<F, R0, T1> FromGenericCallable<F, R0, (T1)> for RustClosure
 // where
 //     R0: crate::object::IntoNyaType + 'static,
-//     T1: TryFrom<NyaPrimitiveType, Error = NotCorrectTypeError> + 'static,
-//     T2: TryFrom<NyaPrimitiveType, Error = NotCorrectTypeError> + 'static,
-//     F: IntoFunctionGenericType<R0, (T1, T2)> + 'static,
-//     FunctionGenericType<F, R0, (T1, T2)>: CallableRustClosure<Error = NotCorrectTypeError>,
+//     T1: FromNyaType + 'static,
+//     F: IntoFunctionGenericType<R0, (T1)> + 'static,
+//     FunctionGenericType<F, R0, (T1)>: CallableRustClosure,
 // {
 //     fn from_callable(func: F) -> Self {
 //         Self {
@@ -59,12 +57,12 @@ where
 macro_rules! impl_callable_for_fn {
     ($($T:ident),*) => {
 
-        impl<F, R0, $($T),*> FromGenericCallable<F, R0, ($($T),*)> for RustClosure
+        impl<F, R0, $($T),*> FromGenericCallable<F, R0, ($($T,)*)> for RustClosure
         where
             R0: crate::object::IntoNyaType + 'static,
-            $($T: TryFrom<NyaPrimitiveType, Error = NotCorrectTypeError> + 'static),*,
-            F: IntoFunctionGenericType<R0, ($($T),*)> + 'static,
-            FunctionGenericType<F, R0, ($($T),*)>: CallableRustClosure<Error = NotCorrectTypeError>,
+            $($T: $crate::object::FromNyaType + 'static),*,
+            F: IntoFunctionGenericType<R0, ($($T,)*)> + 'static,
+            FunctionGenericType<F, R0, ($($T,)*)>: CallableRustClosure,
         {
             fn from_callable(func: F) -> Self {
                 Self {
@@ -89,12 +87,11 @@ macro_rules! impl_callable_for_fn {
         where
             F: Fn($($T),*) -> R0,
             R0: $crate::object::IntoNyaType,
-            $($T: TryFrom<NyaPrimitiveType, Error = NotCorrectTypeError>),*
+            $($T: $crate::object::FromNyaType),*
         {
-            type Error = NotCorrectTypeError;
 
             #[allow(non_snake_case)]
-            fn call(&self, state: &mut NyaState) -> Result<(), Self::Error> {
+            fn call(&self, state: &mut NyaState) -> Option<()> {
                 let arg_count = [$(stringify!($T)),*].len() as isize;
                 let mut index = 0;
 
@@ -105,7 +102,7 @@ macro_rules! impl_callable_for_fn {
 
                 let r0 = (self.inner)($($T),*);
                 state.push_value(r0);
-                Ok(())
+                Some(())
             }
         }
     };
@@ -125,12 +122,11 @@ generate_all_callables!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
 
 // impl<T> CallableRustClosure for fn(T)
 // where
-//     T: TryFrom<NyaPrimitiveType, Error = NotCorrectTypeError>,
+//     T: FromNyaType,
 // {
-//     type Error = NotCorrectTypeError;
-//     fn call(&self, state: &NyaState) -> Result<(), Self::Error> {
+//     fn call(&self, state: &mut NyaState) -> Option<()> {
 //         let arg1 = state.get_stack(-1)?;
 //         (*self)(arg1);
-//         Ok(())
+//         Some(())
 //     }
 // }

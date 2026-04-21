@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    garbage_collect::{GcInnerGuard, GcInnerGuardMut, GcObject},
+    garbage_collect::{GcGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
     state::NyaState,
 };
 
@@ -78,6 +78,12 @@ pub struct Nil;
 
 pub trait IntoNyaType {
     fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType;
+}
+
+impl IntoNyaType for () {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
+        Nil.into_nya_object(state)
+    }
 }
 
 impl IntoNyaType for Nil {
@@ -214,6 +220,24 @@ where
         }
         let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
         NyaPrimitiveType::HeapRef(heap_ref)
+    }
+}
+
+impl IntoNyaType for GcGuard {
+    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
+        NyaPrimitiveType::HeapRef(*self)
+    }
+}
+
+impl<T> IntoNyaType for GcInnerGuard<T> {
+    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
+        NyaPrimitiveType::HeapRef(*self.guard())
+    }
+}
+
+impl<T> IntoNyaType for GcInnerGuardMut<T> {
+    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
+        NyaPrimitiveType::HeapRef(*self.guard())
     }
 }
 

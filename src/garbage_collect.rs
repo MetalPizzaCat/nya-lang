@@ -152,6 +152,14 @@ pub struct GcInnerGuard<T: 'static> {
     value: Ref<'static, T>,
 }
 
+impl<T: 'static> GcInnerGuard<T> {
+    pub fn guard(self) -> GcGuard {
+        GcGuard {
+            inner: self._gc_guard,
+        }
+    }
+}
+
 impl<T> Deref for GcInnerGuard<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
@@ -162,6 +170,14 @@ impl<T> Deref for GcInnerGuard<T> {
 pub struct GcInnerGuardMut<T: 'static> {
     _gc_guard: Rc<GcObject>,
     value: RefMut<'static, T>,
+}
+
+impl<T: 'static> GcInnerGuardMut<T> {
+    pub fn guard(self) -> GcGuard {
+        GcGuard {
+            inner: self._gc_guard,
+        }
+    }
 }
 
 impl<T> Deref for GcInnerGuardMut<T> {
