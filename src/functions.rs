@@ -1,21 +1,41 @@
-use std::{ops::Not, sync::Arc};
+use std::sync::Arc;
 
-use crate::{
-    object::{FromNyaType, NyaPrimitiveType},
-    state::NyaState,
-};
+use crate::state::NyaState;
 
+// We create a [`FunctionGenericType`] from any function.
+// `FunctionGenericType<T, R, Args>` implements [`CallableRustClosure`].
+// [`RustFunction`] accepts any type that implements [`IntoFunctionGenericType`]
+
+// RustFunction is the only type in this module you should have to worry about... probably.
+
+/// This type holds a callable rust function and is created with the [`FromGenericCallable`] trait.
+///
+/// # Examples
+/// ```rust,ignore
+/// let mut ns = NyaState::new();
+/// ns.create_stack_frame();
+/// ns.push_value(10);
+/// ns.push_value(5);
+///
+/// let func = RustFunction::from_callable(|a: i64, b: i64| -> i64 { a + b });
+/// func.call(&mut ns);
+///
+/// let value: i64 = ns.get_value(-1);
+/// assert_e1!(value, 15);
+/// ```
 #[derive(Clone)]
-pub struct RustClosure {
+pub struct RustFunction {
     func: Arc<dyn CallableRustClosure>,
 }
 
-impl RustClosure {
+impl RustFunction {
+    /// Call the function poping its paremeters off the stack and push its result onto it.
     pub fn call(&self, state: &mut NyaState) -> Option<()> {
         self.func.call(state)
     }
 }
 
+/// Turn a generic function into [`self`].
 pub trait FromGenericCallable<F, R0, Args>
 where
     F: IntoFunctionGenericType<R0, Args> + 'static,
@@ -23,16 +43,19 @@ where
     fn from_callable(func: F) -> Self;
 }
 
+/// Generic trait for calling an object.
 pub trait CallableRustClosure {
     fn call(&self, state: &mut NyaState) -> Option<()>;
 }
 
+/// Represents any rust function.
 pub struct FunctionGenericType<F, R, Args> {
     pub inner: F,
     _args_marker: std::marker::PhantomData<Args>,
     _return_marker: std::marker::PhantomData<R>,
 }
 
+/// Turn [`self`] into [`FunctionGenericType`].
 pub trait IntoFunctionGenericType<R, Args>
 where
     Self: Sized,
@@ -57,10 +80,10 @@ where
 macro_rules! impl_callable_for_fn {
     ($($T:ident),*) => {
 
-        impl<F, R0, $($T),*> FromGenericCallable<F, R0, ($($T,)*)> for RustClosure
+        impl<F, R0, $($T),*> FromGenericCallable<F, R0, ($($T,)*)> for RustFunction
         where
-            R0: crate::object::IntoNyaType + 'static,
-            $($T: $crate::object::FromNyaType + 'static),*,
+            R0: crate::object::IntoNyaObject + 'static,
+            $($T: $crate::object::FromNyaObject + 'static),*,
             F: IntoFunctionGenericType<R0, ($($T,)*)> + 'static,
             FunctionGenericType<F, R0, ($($T,)*)>: CallableRustClosure,
         {
@@ -86,8 +109,8 @@ macro_rules! impl_callable_for_fn {
         impl<F, R0, $($T),*> CallableRustClosure for FunctionGenericType<F, R0, ($($T,)*)>
         where
             F: Fn($($T),*) -> R0,
-            R0: $crate::object::IntoNyaType,
-            $($T: $crate::object::FromNyaType),*
+            R0: $crate::object::IntoNyaObject,
+            $($T: $crate::object::FromNyaObject),*
         {
 
             #[allow(non_snake_case)]

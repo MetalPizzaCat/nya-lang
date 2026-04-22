@@ -4,297 +4,319 @@ use std::{
 };
 
 use crate::{
-    garbage_collect::{GcHeapGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
+    garbage_collector::{GcHeapGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
     state::NyaState,
 };
 
-/// This type holds a value for the vm through the vm stack.
+/// This type holds a value on the stack or likewise for [`NyaState`] and can also hold a reference
+/// to a heap object.
 #[derive(Debug, Clone, Copy)]
-pub enum NyaPrimitiveType {
+pub enum NyaPrimitiveObject {
     HeapRef(GcObject),
     Number(f64),
     Int(i64),
     Nil,
 }
 
-impl NyaPrimitiveType {
-    /// marks references to the heap to not be freed by the gc
+impl NyaPrimitiveObject {
+    /// marks heap references to the heap to not be freed by the
+    /// [`crate::garbage_collector::GarbageCollector`].
     pub fn mark_reference(&mut self) {
         match self {
-            NyaPrimitiveType::HeapRef(obj) => {
-                let raw = obj.get_raw_mut();
-                if !raw.marked {
-                    raw.marked = true;
-                    raw.borrow_mut().mark_children();
+            NyaPrimitiveObject::HeapRef(obj) => {
+                if !obj.is_marked() {
+                    obj.mark();
+                    obj.borrow_mut().mark_children();
                 }
             }
-            NyaPrimitiveType::Number(_) | NyaPrimitiveType::Int(_) | NyaPrimitiveType::Nil => {}
+            NyaPrimitiveObject::Number(_)
+            | NyaPrimitiveObject::Int(_)
+            | NyaPrimitiveObject::Nil => {}
         }
     }
 
+    /// Consumes [`self`] to turn it into a hashable type to be used in a table.
     pub fn into_hashable(self) -> Option<NyaHashableType> {
         match self {
             Self::Number(_) | Self::Nil => None,
             Self::Int(i) => Some(NyaHashableType::Int(i)),
             Self::HeapRef(heap_obj) => match &*heap_obj.borrow() {
-                NyaHeapType::Table(_) => None,
-                NyaHeapType::String(s) => Some(NyaHashableType::String(s.clone())),
+                NyaHeapObject::Table(_) => None,
+                NyaHeapObject::String(s) => Some(NyaHashableType::String(s.clone())),
             },
         }
     }
 }
 
-/// This type holds a value that is hashable
+/// This type holds a value that is hashable for use in a table.
+/// It is made by [`NyaPrimitiveObject::into_hashable()`]
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum NyaHashableType {
     Int(i64),
     String(String),
 }
 
-/// This type holds a value for the vm through the heap
+/// This type holds a value for the [`NyaState`] that should live on the heap through the
+/// [`crate::garbage_collector::GarbageCollector`].
 #[derive(Debug, Clone)]
-pub enum NyaHeapType {
-    Table(HashMap<NyaHashableType, NyaPrimitiveType>),
+pub enum NyaHeapObject {
+    Table(HashMap<NyaHashableType, NyaPrimitiveObject>),
     String(String),
 }
 
-impl NyaHeapType {
-    /// marks children to not be freed by the gc
+impl NyaHeapObject {
+    /// marks children to not be freed by the [`crate::garbage_collector::GarbageCollector`].
     pub fn mark_children(&mut self) {
         match self {
-            NyaHeapType::Table(hash_map) => {
+            NyaHeapObject::Table(hash_map) => {
                 for (_, obj) in hash_map.iter_mut() {
                     obj.mark_reference();
                 }
             }
-            NyaHeapType::String(_) => {}
+            NyaHeapObject::String(_) => {}
+        }
+    }
+}
+
+/// `Nil` type as a structure that implments [`IntoNyaObject`] and [`FromNyaObject`].
+pub struct Nil;
+
+impl IntoNyaObject for Nil {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Nil
+    }
+}
+
+impl FromNyaObject for Nil {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
+        match object {
+            NyaPrimitiveObject::Nil => Some(Nil),
+            _ => None,
         }
     }
 }
 
 // into trait
 
-pub struct Nil;
-
-pub trait IntoNyaType {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType;
+/// Consumes [`self`] to turn it into a [`NyaPrimitiveObject`] and may make an heap allocation
+/// through the [`NyaState`].
+pub trait IntoNyaObject {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveObject;
 }
 
-impl IntoNyaType for () {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
-        Nil.into_nya_object(state)
-    }
-}
-
-impl IntoNyaType for Nil {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Nil
-    }
-}
-
-impl IntoNyaType for NyaPrimitiveType {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
+impl IntoNyaObject for NyaPrimitiveObject {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
         self
     }
 }
 
-impl IntoNyaType for &str {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
-        let obj = state.alloc_heap_object(NyaHeapType::String(self.into()));
-        NyaPrimitiveType::HeapRef(obj)
+impl IntoNyaObject for &str {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveObject {
+        let obj = state.alloc_heap_object(NyaHeapObject::String(self.into()));
+        NyaPrimitiveObject::HeapRef(obj)
     }
 }
 
-impl IntoNyaType for String {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
-        let obj = state.alloc_heap_object(NyaHeapType::String(self));
-        NyaPrimitiveType::HeapRef(obj)
+impl IntoNyaObject for String {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveObject {
+        let obj = state.alloc_heap_object(NyaHeapObject::String(self));
+        NyaPrimitiveObject::HeapRef(obj)
     }
 }
 
-impl IntoNyaType for u8 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for u8 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for u16 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for u16 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for u32 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for u32 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for u64 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for u64 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for i8 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for i8 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for i16 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for i16 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for i32 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self as i64)
+impl IntoNyaObject for i32 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self as i64)
     }
 }
 
-impl IntoNyaType for i64 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Int(self)
+impl IntoNyaObject for i64 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Int(self)
     }
 }
 
-impl IntoNyaType for f32 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Number(self as f64)
+impl IntoNyaObject for f32 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Number(self as f64)
     }
 }
 
-impl IntoNyaType for f64 {
-    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::Number(self)
+impl IntoNyaObject for f64 {
+    fn into_nya_object(self, _: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::Number(self)
     }
 }
 
-impl<T> IntoNyaType for Vec<T>
+impl<T> IntoNyaObject for Vec<T>
 where
-    T: IntoNyaType,
+    T: IntoNyaObject,
 {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveObject {
         let mut map = HashMap::new();
         for (i, v) in self.into_iter().enumerate() {
-            if let Some(key) = NyaPrimitiveType::Int(i as i64).into_hashable() {
+            if let Some(key) = NyaPrimitiveObject::Int(i as i64).into_hashable() {
                 let obj = v.into_nya_object(state);
                 map.insert(key, obj);
             }
         }
-        let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
-        NyaPrimitiveType::HeapRef(heap_ref)
+        let heap_ref = state.alloc_heap_object(NyaHeapObject::Table(map));
+        NyaPrimitiveObject::HeapRef(heap_ref)
     }
 }
 
-impl<T, const N: usize> IntoNyaType for [T; N]
+impl<T, const N: usize> IntoNyaObject for [T; N]
 where
-    T: IntoNyaType,
+    T: IntoNyaObject,
 {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveObject {
         let mut map = HashMap::new();
         for (i, v) in self.into_iter().enumerate() {
-            if let Some(key) = NyaPrimitiveType::Int(i as i64).into_hashable() {
+            if let Some(key) = NyaPrimitiveObject::Int(i as i64).into_hashable() {
                 let obj = v.into_nya_object(state);
                 map.insert(key, obj);
             }
         }
-        let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
-        NyaPrimitiveType::HeapRef(heap_ref)
+        let heap_ref = state.alloc_heap_object(NyaHeapObject::Table(map));
+        NyaPrimitiveObject::HeapRef(heap_ref)
     }
 }
 
-impl<K, V> IntoNyaType for HashMap<K, V>
+impl<K, V> IntoNyaObject for HashMap<K, V>
 where
-    K: IntoNyaType,
-    V: IntoNyaType,
+    K: IntoNyaObject,
+    V: IntoNyaObject,
 {
-    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveType {
+    fn into_nya_object(self, state: &mut NyaState) -> NyaPrimitiveObject {
         let mut map = HashMap::new();
         for (k, v) in self {
             if let Some(key) = k.into_nya_object(state).into_hashable() {
                 map.insert(key, v.into_nya_object(state));
             }
         }
-        let heap_ref = state.alloc_heap_object(NyaHeapType::Table(map));
-        NyaPrimitiveType::HeapRef(heap_ref)
+        let heap_ref = state.alloc_heap_object(NyaHeapObject::Table(map));
+        NyaPrimitiveObject::HeapRef(heap_ref)
     }
 }
 
-impl IntoNyaType for GcHeapGuard {
-    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::HeapRef(*self)
+impl IntoNyaObject for GcHeapGuard {
+    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::HeapRef(*self)
     }
 }
 
-impl<T> IntoNyaType for GcInnerGuard<T> {
-    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::HeapRef(*self.guard())
+impl<T> IntoNyaObject for GcInnerGuard<T> {
+    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::HeapRef(*self.guard())
     }
 }
 
-impl<T> IntoNyaType for GcInnerGuardMut<T> {
-    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
-        NyaPrimitiveType::HeapRef(*self.guard())
+impl<T> IntoNyaObject for GcInnerGuardMut<T> {
+    fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveObject {
+        NyaPrimitiveObject::HeapRef(*self.guard())
     }
 }
 
 // from
 
-pub trait FromNyaType
+/// Consumes [`NyaPrimitiveObject`] to turn it into [`self`] which may be done through a heap guard.
+pub trait FromNyaObject
 where
     Self: Sized,
 {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self>;
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self>;
 }
 
-impl FromNyaType for f64 {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+impl FromNyaObject for () {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
         match object {
-            NyaPrimitiveType::Number(n) => Some(n),
+            NyaPrimitiveObject::Nil => Some(()),
             _ => None,
         }
     }
 }
 
-impl FromNyaType for f32 {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+impl FromNyaObject for f64 {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
         match object {
-            NyaPrimitiveType::Number(n) => Some(n as f32),
+            NyaPrimitiveObject::Number(n) => Some(n),
             _ => None,
         }
     }
 }
 
-impl FromNyaType for i64 {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+impl FromNyaObject for f32 {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
         match object {
-            NyaPrimitiveType::Int(i) => Some(i),
+            NyaPrimitiveObject::Number(n) => Some(n as f32),
             _ => None,
         }
     }
 }
 
-impl FromNyaType for u64 {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+impl FromNyaObject for i64 {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
+        match object {
+            NyaPrimitiveObject::Int(i) => Some(i),
+            _ => None,
+        }
+    }
+}
+
+impl FromNyaObject for u64 {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
         Some(i64::from_nya_object(object)? as u64)
     }
 }
 
-impl FromNyaType for usize {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
+impl FromNyaObject for usize {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
         Some(i64::from_nya_object(object)? as usize)
     }
 }
 
-impl FromNyaType for GcInnerGuard<String> {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
-        if let NyaPrimitiveType::HeapRef(heap_ref) = object {
+impl FromNyaObject for GcInnerGuard<String> {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
+        if let NyaPrimitiveObject::HeapRef(heap_ref) = object {
             heap_ref.create_guard().map_inner(|obj| {
                 Ref::filter_map(obj.borrow(), |inner| match inner {
-                    NyaHeapType::String(s) => Some(s),
+                    NyaHeapObject::String(s) => Some(s),
                     _ => None,
                 })
                 .ok()
@@ -305,12 +327,12 @@ impl FromNyaType for GcInnerGuard<String> {
     }
 }
 
-impl FromNyaType for GcInnerGuardMut<String> {
-    fn from_nya_object(object: NyaPrimitiveType) -> Option<Self> {
-        if let NyaPrimitiveType::HeapRef(heap_ref) = object {
+impl FromNyaObject for GcInnerGuardMut<String> {
+    fn from_nya_object(object: NyaPrimitiveObject) -> Option<Self> {
+        if let NyaPrimitiveObject::HeapRef(heap_ref) = object {
             heap_ref.create_guard().map_inner_mut(|obj| {
                 RefMut::filter_map(obj.borrow_mut(), |inner| match inner {
-                    NyaHeapType::String(s) => Some(s),
+                    NyaHeapObject::String(s) => Some(s),
                     _ => None,
                 })
                 .ok()

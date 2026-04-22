@@ -1,7 +1,7 @@
-use crate::object::NyaPrimitiveType;
+use crate::object::NyaPrimitiveObject;
 
 pub enum Instruction {
-    Push(NyaPrimitiveType),
+    Push(NyaPrimitiveObject),
     Pop,
     SetGlobal(usize),
     GetGlobal(usize),
