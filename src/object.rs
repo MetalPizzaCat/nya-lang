@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    garbage_collect::{GcGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
+    garbage_collect::{GcHeapGuard, GcInnerGuard, GcInnerGuardMut, GcObject},
     state::NyaState,
 };
 
@@ -223,7 +223,7 @@ where
     }
 }
 
-impl IntoNyaType for GcGuard {
+impl IntoNyaType for GcHeapGuard {
     fn into_nya_object(self, _state: &mut NyaState) -> NyaPrimitiveType {
         NyaPrimitiveType::HeapRef(*self)
     }

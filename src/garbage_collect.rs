@@ -64,7 +64,7 @@ impl GcObject {
         }
     }
 
-    pub fn create_guard(self) -> GcGuard {
+    pub fn create_guard(self) -> GcHeapGuard {
         unsafe { (*self.gc).create_guard(self) }
     }
 
@@ -98,23 +98,24 @@ impl DerefMut for GcObject {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct GcGuard {
-    inner: Rc<GcObject>,
+pub struct GcHeapGuard {
+    object: GcObject,
+    guard: Rc<()>,
 }
 
-impl Deref for GcGuard {
+impl Deref for GcHeapGuard {
     type Target = GcObject;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.object
     }
 }
 
-impl GcGuard {
+impl GcHeapGuard {
     pub fn map_inner<T, F>(self, f: F) -> Option<GcInnerGuard<T>>
     where
         F: FnOnce(&RefCell<NyaHeapType>) -> Option<Ref<'_, T>>,
     {
-        let refcell = &**self.inner;
+        let refcell = &*self.object;
 
         let value_ref = f(refcell)?;
 
@@ -122,7 +123,8 @@ impl GcGuard {
             let extended_ref = std::mem::transmute::<Ref<'_, T>, Ref<'static, T>>(value_ref);
 
             Some(GcInnerGuard {
-                _gc_guard: self.inner.clone(),
+                guard: self.guard,
+                object: self.object,
                 value: extended_ref,
             })
         }
@@ -132,7 +134,7 @@ impl GcGuard {
     where
         F: FnOnce(&RefCell<NyaHeapType>) -> Option<RefMut<'_, T>>,
     {
-        let refcell = &**self.inner;
+        let refcell = &*self.object;
 
         let value_ref = f(refcell)?;
 
@@ -140,7 +142,8 @@ impl GcGuard {
             let extended_ref = std::mem::transmute::<RefMut<'_, T>, RefMut<'static, T>>(value_ref);
 
             Some(GcInnerGuardMut {
-                _gc_guard: self.inner.clone(),
+                guard: self.guard,
+                object: self.object,
                 value: extended_ref,
             })
         }
@@ -148,14 +151,16 @@ impl GcGuard {
 }
 
 pub struct GcInnerGuard<T: 'static> {
-    _gc_guard: Rc<GcObject>,
+    guard: Rc<()>,
+    object: GcObject,
     value: Ref<'static, T>,
 }
 
 impl<T: 'static> GcInnerGuard<T> {
-    pub fn guard(self) -> GcGuard {
-        GcGuard {
-            inner: self._gc_guard,
+    pub fn guard(self) -> GcHeapGuard {
+        GcHeapGuard {
+            guard: self.guard,
+            object: self.object,
         }
     }
 }
@@ -168,14 +173,16 @@ impl<T> Deref for GcInnerGuard<T> {
 }
 
 pub struct GcInnerGuardMut<T: 'static> {
-    _gc_guard: Rc<GcObject>,
+    guard: Rc<()>,
+    object: GcObject,
     value: RefMut<'static, T>,
 }
 
 impl<T: 'static> GcInnerGuardMut<T> {
-    pub fn guard(self) -> GcGuard {
-        GcGuard {
-            inner: self._gc_guard,
+    pub fn guard(self) -> GcHeapGuard {
+        GcHeapGuard {
+            guard: self.guard,
+            object: self.object,
         }
     }
 }
@@ -195,14 +202,14 @@ impl<T> DerefMut for GcInnerGuardMut<T> {
 
 pub struct GarbageCollector {
     heap: Vec<GcObject>,
-    guards: HashSet<GcGuard>,
+    guard: Rc<()>,
 }
 
 impl GarbageCollector {
     pub fn new() -> Self {
         Self {
             heap: Vec::new(),
-            guards: HashSet::new(),
+            guard: Rc::new(()),
         }
     }
 
@@ -234,27 +241,16 @@ impl GarbageCollector {
         }
     }
 
-    pub fn create_guard(&mut self, object: GcObject) -> GcGuard {
-        if let Some(guard) = self.guards.iter().find(|g| *g.inner == object) {
-            guard.clone()
-        } else {
-            let guard = GcGuard {
-                inner: Rc::new(object),
-            };
-            self.guards.insert(guard.clone());
-            guard
+    pub fn create_guard(&mut self, object: GcObject) -> GcHeapGuard {
+        GcHeapGuard {
+            guard: self.guard.clone(),
+            object,
         }
     }
 
     pub unsafe fn sweep(&mut self) {
-        self.guards.retain(|g| Rc::strong_count(&g.inner) > 1);
-
-        for g in self.guards.iter() {
-            let raw = g.get_raw_mut();
-            raw.marked = true;
-            unsafe {
-                (*g.as_ptr()).mark_children();
-            }
+        if Rc::strong_count(&self.guard) > 1 {
+            return;
         }
 
         for i in (0..self.heap.len()).rev() {
