@@ -300,6 +300,12 @@ impl NyaState {
         self.globals.insert(name.to_string(), obj);
     }
 
+    /// Directly get a global by name a value.
+    pub fn get_global_direct(&mut self, name: &str) -> Option<NyaPrimitiveObject>
+    {
+        self.globals.get(name).copied()
+    }
+
     /// Remove a global by name.
     pub fn remove_global(&mut self, name: &str) {
         self.globals.remove(name);

@@ -4,11 +4,14 @@ pub mod instruction;
 pub mod object;
 pub mod state;
 
+pub mod codegen;
 #[cfg(test)]
 mod tests {
     use crate::{
         functions::{FromGenericCallable, RustFunction},
         garbage_collector::{GcInnerGuard, GcInnerGuardMut},
+        instruction::Instruction,
+        object::{FromNyaObject, IntoNyaObject, NyaPrimitiveObject},
         state::NyaState,
     };
 
@@ -49,5 +52,23 @@ mod tests {
 
         let s: GcInnerGuard<String> = ns.get_stack(-1).unwrap();
         assert_eq!(*s, "whoo :3");
+    }
+
+    #[test]
+    fn test_instruction_set() {
+        let mut ns = NyaState::new();
+        let str = "Hello world".into_nya_object(&mut ns);
+        let str_name = "global1".into_nya_object(&mut ns);
+        ns.add_constant(str_name);
+        ns.run_instructions(
+            Vec::new(),
+            &vec![Instruction::Push(str), Instruction::SetGlobal(0)],
+        );
+        let v = ns.get_global_direct("global1");
+        assert!(v.is_some());
+
+        let str_val = GcInnerGuard::from_nya_object(v.unwrap());
+        assert!(str_val.is_some());
+        assert_eq!(*str_val.unwrap(), "Hello world".to_owned());
     }
 }
