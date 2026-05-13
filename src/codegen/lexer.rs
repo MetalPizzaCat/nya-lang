@@ -362,6 +362,48 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    pub fn tokenize_number(&mut self) -> Result<Option<Token<'a>>, ParsingError> {
+        if !self.peek_char().is_some_and(char::is_numeric) {
+            return Ok(None);
+        }
+
+        let mut it = self.chars_indices.clone();
+        if let Some((start, _)) = it.peek().cloned() {
+            let mut len: usize = 0;
+            let mut has_separator: bool = false;
+            while let Some((_, c)) = it.next_if(|(_, c)| c.is_numeric() || *c == '.') {
+                if c == '.' && has_separator {
+                    return Err(ParsingError::new(
+                        ParsingErrorKind::InvalidNumberConstant,
+                        self.row,
+                        self.column,
+                    ));
+                } else if c == '.' && !has_separator {
+                    has_separator = true;
+                }
+                len += 1;
+            }
+            let tok = Token::new(
+                TokenKind::Number((&self.code[start..(start + len)]).parse::<f64>().map_err(
+                    |e| {
+                        ParsingError::new(
+                            ParsingErrorKind::InvalidNumberConstant,
+                            self.row,
+                            self.column,
+                        )
+                    },
+                )?),
+                self.row,
+                self.column,
+            );
+
+            self.advance_by(len);
+            Ok(Some(tok))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub const fn convert_special(ch: &str) -> Option<char> {
         match ch.as_bytes() {
             b"\\n" => Some('\n'),
@@ -475,20 +517,26 @@ impl<'a> Lexer<'a> {
         while self.peek_char().is_some() {
             self.skip_char_while(char::is_whitespace);
 
-            let token = self
-                .tokenize_keyword()
-                .or_else(|| self.tokenize_bool())
-                .or_else(|| self.tokenize_id())
-                .or_else(|| self.tokenize_string())
-                //.or_else(|| self.tokenize_integer()?)
-                .or_else(|| self.tokenize_separator())
-                .ok_or(ParsingError::new(
-                    ParsingErrorKind::UnknownCharacter,
-                    self.row,
-                    self.column,
-                ))?;
+            if let Some(t) = self.tokenize_integer()? {
+                self.tokens.push(t);
+            }
+            if let Some(t2) = self.tokenize_number()? {
+                self.tokens.push(t2);
+            } else {
+                let token = self
+                    .tokenize_keyword()
+                    .or_else(|| self.tokenize_bool())
+                    .or_else(|| self.tokenize_id())
+                    .or_else(|| self.tokenize_string())
+                    .or_else(|| self.tokenize_separator())
+                    .ok_or(ParsingError::new(
+                        ParsingErrorKind::UnknownCharacter,
+                        self.row,
+                        self.column,
+                    ))?;
 
-            self.tokens.push(token);
+                self.tokens.push(token);
+            }
         }
         Ok(())
     }
@@ -644,6 +692,17 @@ mod tests {
         assert!(matches!(
             res.unwrap().unwrap().token_kind,
             TokenKind::Integer(69420)
+        ));
+    }
+
+    #[test]
+    fn test_number() {
+        let code = "69.420";
+        let mut lexer = Lexer::new(code);
+        let res = lexer.tokenize_number();
+        assert!(matches!(
+            res.unwrap().unwrap().token_kind,
+            TokenKind::Number(69.420)
         ));
     }
 
